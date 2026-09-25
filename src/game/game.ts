@@ -45,8 +45,10 @@ const SLASH_REACH = 40; // the kaiju's body radius (~21 m) + blade (13 m) + arm
 const SLASH_DAMAGE = [6, 6, 7, 15];
 /** How the kaiju reels: impulse per hit kind. */
 const RECOIL = { beam: 0.28, slash: 0.6, finisher: 1.15 };
+/** 1/s: a knock of `k` metres is a slide starting at k * KNOCK_DECAY m/s. */
+const KNOCK_DECAY = 3.5;
 /** After a slash finishes, the next click within this window continues the combo. */
-const COMBO_WINDOW = 0.75;
+const COMBO_WINDOW = 1.1;
 
 type Phase = 'calm' | 'rising' | 'fighting' | 'dying' | 'cleared';
 interface Orb { mesh: THREE.Mesh; v: THREE.Vector3; life: number }
@@ -103,6 +105,8 @@ export class RobotGame {
   private rec = 0;
   private recV = 0;
   private stun = 0;
+  /** Knock-back slide of the kaiju (m/s), decays at KNOCK_DECAY. */
+  private readonly kVel = new THREE.Vector3();
 
   constructor(world: World, player: Player, hud: GameHud) {
     this.world = world;
@@ -157,7 +161,7 @@ export class RobotGame {
       if (this.t - this.warnAt > 1.5) { this.warnAt = this.t; this.hud.toast('後ろには撃てない — 旋回中'); }
       return false;
     }
-    if (this.cooldown > 0 || v.aim < 0.9) return false; // rifle still coming up
+    if (this.cooldown > 0 || v.aimRaw < 0.8) return false; // rifle still coming up
     this.cooldown = BEAM_COOLDOWN;
     const from = v.muzzle(new THREE.Vector3());
     const dir = v.muzzleDir(new THREE.Vector3());
@@ -224,11 +228,14 @@ export class RobotGame {
     const hf = Math.min(1, Math.max(0, this.hitFlash) * 3.5);
     k.skin.emissive.setRGB(0.42 * hf, 0.22 * hf, 0.3 * hf);
     // the kaiju's recoil spring
-    const acc = -38 * this.rec - 6.5 * this.recV; // soft spring: a slow, heavy sway back and forth
+    const acc = -20 * this.rec - 4.6 * this.recV; // soft spring: a slow, heavy sway back and forth
     this.recV += acc * dt;
     this.rec = Math.max(-0.25, Math.min(1.0, this.rec + this.recV * dt));
     this.maxRecoil = Math.max(this.maxRecoil, this.rec);
     this.stun = Math.max(0, this.stun - dt);
+    this.kPos.x += this.kVel.x * dt;
+    this.kPos.z += this.kVel.z * dt;
+    this.kVel.multiplyScalar(Math.exp(-KNOCK_DECAY * dt));
     if (k.root.visible) {
       camera.getWorldPosition(_c);
       k.bar.lookAt(_c);
@@ -259,6 +266,7 @@ export class RobotGame {
     this.setMode('shoot', true);
     this.player.vehicle?.resetSaber();
     this.rec = this.recV = this.stun = 0;
+    this.kVel.set(0, 0, 0);
     this.maxRecoil = 0;
     this.comboLog.length = 0;
     this.player.reset();
@@ -299,7 +307,7 @@ export class RobotGame {
     // face the kaiju
     const want = Math.atan2(-(this.kPos.x - v.pos.x), -(this.kPos.z - v.pos.z));
     const d = wrap(want - v.yaw);
-    if (Math.abs(d) > 0.01) v.yaw += Math.sign(d) * Math.min(Math.abs(d), 2.2 * dt);
+    if (Math.abs(d) > 0.01) v.yaw += Math.sign(d) * Math.min(Math.abs(d), 1.4 * dt);
     // start the next cut: the combo continues if the click came soon enough after the last one
     if (sb.state !== 'slash') this.sinceSlash += dt;
     if (this.wantSlash) {
@@ -345,12 +353,12 @@ export class RobotGame {
     this.hp = Math.max(0, this.hp - damage);
     this.hits++;
     this.hitFlash = impulse > 0.5 ? 0.3 : 0.18;
-    this.recV += impulse * 6.5;
+    this.recV += impulse * 4.8;
     this.stun = Math.max(this.stun, 0.35 + impulse * 0.6);
     // shoved back, away from the robot
     const dx = this.kPos.x - v.pos.x, dz = this.kPos.z - v.pos.z, l = Math.hypot(dx, dz) || 1;
-    this.kPos.x += (dx / l) * knock;
-    this.kPos.z += (dz / l) * knock;
+    this.kVel.x += (dx / l) * knock * KNOCK_DECAY;
+    this.kVel.z += (dz / l) * knock * KNOCK_DECAY;
     this.breath = Math.min(this.breath, 0.2); // a hard hit breaks its charge
     this.destruction.burst(at, new THREE.Color('#6a4a8a'), impulse > 0.5 ? 10 : 5, 4);
     this.hud.gauge(this.hp / KAIJU_HP);
@@ -476,6 +484,7 @@ export class RobotGame {
     this.hud.gauge(0);
     this.hud.toast('怪獣を倒した！');
     this.rec = this.recV = 0;
+    this.kVel.set(0, 0, 0);
     this.setMode('shoot', true);
     sfx.roar(this.kPos.clone().setY(20), true);
     sfx.impact(this.kPos.clone().setY(10), true);

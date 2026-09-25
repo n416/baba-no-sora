@@ -65,22 +65,22 @@ const REACH = P([3.45, 0, 0.3], [0.35, 0, 0.15], [0.05, 0.25, -0.05], 0.15);
 /** The combo: a diagonal cut, a backhand sweep, a rising cut, a two-handed overhead finisher. */
 export const SLASHES: { name: string; dur: number; wind: Pose; strike: Pose; follow: Pose }[] = [
   // diagonal: the blade leans over the shoulder, then cuts down across the body
-  { name: '袈裟斬り', dur: 0.5,
+  { name: '袈裟斬り', dur: 0.85,
     wind: P([3.0, -0.45, -0.5], [2.2, -0.3, 0.3], [0.12, -0.6, -0.12], 0.45, 0, 0, -0.2, 0.8),
     strike: P([1.0, 0.35, 0.35], [0.7, -0.2, 0.1], [-0.22, 0.4, 0.14], 0.8, 3, 0, -0.9, 0.4),
     follow: P([0.85, 0.75, 0.45], [0.45, 0.2, 0.2], [-0.24, 0.6, 0.16], 0.85, 3.5, 0, -0.45) },
   // horizontal: arm level, blade laid out along it, a flat arc from right to left at chest height
-  { name: '横薙ぎ', dur: 0.5,
+  { name: '横薙ぎ', dur: 0.85,
     wind: P([1.5, -1.2, 0], [1.2, -0.9, 0.1], [0.02, -0.65, 0.06], 0.6, 0, 0, -1.4, 1),
     strike: P([1.55, 0.0, 0], [0.8, -0.2, 0.3], [-0.1, 0.0, 0], 0.8, 2, 0, -1.5, 1),
     follow: P([1.5, 1.2, 0], [0.4, 0.9, 0.5], [-0.08, 0.75, -0.06], 0.75, 2.5, 0, -1.45, 1) },
   // rising: blade trailing low behind, swept up past the face
-  { name: '斬り上げ', dur: 0.5,
+  { name: '斬り上げ', dur: 0.85,
     wind: P([0.55, -0.6, 0.45], [0.4, 0.3, 0.2], [-0.3, 0.3, 0.08], 1.0, 0, 0, -0.25, 0.7),
     strike: P([2.1, 0.1, -0.2], [1.1, 0, 0.3], [0.05, -0.1, -0.05], 0.45, 2, 0, -0.9, 0.3),
     follow: P([3.0, 0.4, -0.3], [1.9, 0, 0.5], [0.22, -0.3, -0.1], 0.1, 2, 1.5, -0.7) },
   // overhead: blade back over the head, then straight down in line with the arms
-  { name: '唐竹割り', dur: 0.75,
+  { name: '唐竹割り', dur: 1.25,
     wind: P([3.55, 0.1, 0], [3.45, -0.25, -0.2], [0.28, 0, 0], 0.3, 0, 0.8, -0.3, 1),
     strike: P([1.35, 0.1, 0], [1.3, -0.35, -0.15], [-0.38, 0, 0], 1.0, 5, 0, -0.85, 1),
     follow: P([1.15, 0.1, 0], [1.1, -0.35, -0.1], [-0.36, 0, 0], 0.95, 5.5, 0, -0.4, 1) },
@@ -157,6 +157,10 @@ function legIK(z: number, y: number) {
 const ARM_YAW = THREE.MathUtils.degToRad(40);
 const ARM_PITCH: [number, number] = [THREE.MathUtils.degToRad(-60), THREE.MathUtils.degToRad(55)];
 const ARM_RATE = 3.2;
+/** Rifle arm: seconds to bring it up from the hip, and to lower it again. */
+const RIFLE_UP = 0.22, RIFLE_DOWN = 0.9;
+/** Seconds to take the saber off the back and light it, and to put it away. */
+const DRAW_TIME = 1.2, STOW_TIME = 0.95;
 const _sh = new THREE.Vector3();
 
 export interface VehicleBody {
@@ -549,6 +553,8 @@ export class Vehicle {
   thrust = 0;
   private stride = 0;
   aim = 0;
+  /** Linear 0..1 behind `aim` (which is eased). */
+  aimRaw = 0;
   /** Half-strides taken so far (a footfall each time it changes). */
   get stepCount() {
     return Math.floor(this.stride / Math.PI);
@@ -628,7 +634,7 @@ export class Vehicle {
     let ignite = sb.ignite;
     if (sb.state === 'drawing') {
       // reach over the right shoulder, take the hilt, bring it round to guard, light it
-      const k = sb.t / 0.75;
+      const k = sb.t / DRAW_TIME;
       if (k < 0.45) key = blend(this.poseNow, REACH, ease(k / 0.45));
       else key = blend(REACH, GUARD, ease((k - 0.45) / 0.55));
       if (k >= 0.45 && p.saberBack?.visible) { p.saberBack.visible = false; if (p.saberHand) p.saberHand.visible = true; }
@@ -647,12 +653,14 @@ export class Vehicle {
       ignite = 1;
       if (k >= 1) { sb.state = 'ready'; sb.t = 0; }
     } else if (sb.state === 'stowing') {
-      const k = sb.t / 0.6;
+      // a shot wanted: put the saber away quickly so the rifle can come up
+      if (this.aimHold > 0) sb.t += dt * 2;
+      const k = sb.t / STOW_TIME;
       ignite = Math.max(0, 1 - k / 0.3);
       if (k < 0.5) key = blend(GUARD, REACH, ease(k / 0.5));
       else key = blend(REACH, REST_POSE, ease((k - 0.5) / 0.5));
       if (k >= 0.5 && p.saberHand?.visible) { p.saberHand.visible = false; if (p.saberBack) p.saberBack.visible = true; }
-      if (k >= 1) { sb.state = 'stowed'; sb.t = 0; this.aim = 0; }
+      if (k >= 1) { sb.state = 'stowed'; sb.t = 0; this.aim = this.aimRaw = 0; }
     }
     sb.ignite = ignite;
     this.shimmer += dt;
@@ -884,7 +892,8 @@ export class Vehicle {
       // the right arm (rifle) comes up and tracks the target, as far as a shoulder turns
       if (this.aimHold > 0) {
         this.aimHold -= dt;
-        this.aim = Math.min(1, this.aim + dt * 4);
+        this.aimRaw = Math.min(1, this.aimRaw + dt / RIFLE_UP);
+        this.aim = 1 - (1 - this.aimRaw) ** 3; // quick off the hip, settling onto the target
         const sh = p.arms[1].getWorldPosition(_sh);
         const dx = this.aimTarget.x - sh.x, dy = this.aimTarget.y - sh.y, dz = this.aimTarget.z - sh.z;
         let yaw = Math.atan2(-dx, -dz) - this.yaw;
@@ -896,7 +905,8 @@ export class Vehicle {
         this.armYaw += Math.max(-step, Math.min(step, wantYaw - this.armYaw));
         this.armPitch += Math.max(-step, Math.min(step, wantPitch - this.armPitch));
       } else {
-        this.aim = Math.max(0, this.aim - dt * 1.5);
+        this.aimRaw = Math.max(0, this.aimRaw - dt / RIFLE_DOWN);
+        this.aim = this.aimRaw * this.aimRaw * (3 - 2 * this.aimRaw); // lowered unhurriedly
         this.armYaw *= 1 - Math.min(1, dt * 3);
         this.armPitch *= 1 - Math.min(1, dt * 3);
       }
