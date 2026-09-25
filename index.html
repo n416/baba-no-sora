@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Explore3D Template</title>
+    <style>
+      :root {
+        --paper: rgba(247, 242, 230, 0.9);
+        --ink: #2b2533;
+        --accent: #c9574a;
+      }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe2ec; font-family: 'Yu Gothic', 'Meiryo', 'Hiragino Kaku Gothic ProN', sans-serif; color: var(--ink); }
+      canvas { display: block; }
+      #start {
+        position: fixed; inset: 0; display: grid; place-items: center; cursor: pointer;
+        background: radial-gradient(ellipse at center, rgba(247, 242, 230, 0.55), rgba(247, 242, 230, 0.2));
+      }
+      #start .card { background: var(--paper); padding: 28px 40px; border-radius: 14px; text-align: center; box-shadow: 0 8px 30px rgba(40, 30, 60, 0.18); max-width: 520px; }
+      #start h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0.08em; }
+      #start p { margin: 6px 0; font-size: 14px; line-height: 1.7; }
+      #start .go { margin-top: 14px; font-weight: bold; color: var(--accent); }
+      #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(255, 255, 255, 0.8); box-shadow: 0 0 0 1px rgba(40, 30, 60, 0.4); pointer-events: none; }
+      #timebar {
+        position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+        display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 999px;
+        background: var(--paper); box-shadow: 0 4px 18px rgba(40, 30, 60, 0.15); font-size: 14px; user-select: none;
+      }
+      #timebar input[type='range'] { width: min(46vw, 420px); accent-color: var(--accent); }
+      #timebar button { border: 0; background: var(--ink); color: #fff; border-radius: 999px; width: 30px; height: 30px; cursor: pointer; font-size: 13px; }
+      #timebar .clock { font-variant-numeric: tabular-nums; font-weight: bold; min-width: 3.2em; text-align: center; font-size: 16px; }
+      #timebar .season { opacity: 0.7; }
+      #hint { position: fixed; left: 16px; top: 14px; font-size: 13px; line-height: 1.6; padding: 6px 12px; border-radius: 8px; background: var(--paper); }
+      #toast { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); padding: 8px 18px; border-radius: 8px; background: var(--paper); font-size: 15px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+      #toast.on { opacity: 1; }
+      #vr-button { bottom: 74px !important; }
+      .hidden { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="start">
+      <div class="card">
+        <h1 id="title">Explore3D</h1>
+        <p id="subtitle"></p>
+        <p>W A S D 移動 ／ マウス 視点 ／ Shift 速く<br />F 乗り降り ／ V 一人称・三人称 ／ T 時刻を進める ／ R 最初に戻る</p>
+        <p class="go">クリックで開始</p>
+      </div>
+    </div>
+    <div id="crosshair" class="hidden"></div>
+    <div id="hint" class="hidden"></div>
+    <div id="toast"></div>
+    <div id="timebar">
+      <button id="play" title="1日を早送り (T で時刻ジャンプ)">▶</button>
+      <input id="time" type="range" min="0" max="24" step="0.05" value="15.5" aria-label="時刻" />
+      <span class="clock" id="clock">15:30</span>
+      <span class="season" id="season"></span>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

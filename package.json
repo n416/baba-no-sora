@@ -1,0 +1,30 @@
+{
+  "name": "explore3d-template",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A walk/ride-able anime-background 3D world template (Three.js, cel shading, time-of-day, WebXR) meant to be reshaped by Claude Code from PROMPT.md.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "dev:vr": "vite --mode vr",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "shoot": "node scripts/shoot.mjs",
+    "explore": "node scripts/explore.mjs"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "playwright": "^1.63.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
+  }
+}

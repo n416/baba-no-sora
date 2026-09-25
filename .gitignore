@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.shots/
+shots/
+*.log
+.env*
+
+# Reference images are for local comparison only. Google Maps / Street View
+# captures and copyrighted stills must not be published with the repository.
+refs/place/*
+!refs/place/README.md
+refs/style/*
+!refs/style/README.md
