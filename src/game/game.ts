@@ -41,7 +41,7 @@ const S = 1.6;
 const MELEE_IN = 50;
 const MELEE_OUT = 62;
 /** A slash connects if the kaiju's centre is within this reach and in front. */
-const SLASH_REACH = 36;
+const SLASH_REACH = 40; // the kaiju's body radius (~21 m) + blade (13 m) + arm
 const SLASH_DAMAGE = [6, 6, 7, 15];
 /** How the kaiju reels: impulse per hit kind. */
 const RECOIL = { beam: 0.28, slash: 0.6, finisher: 1.15 };
@@ -305,7 +305,7 @@ export class RobotGame {
     if (this.wantSlash) {
       const next = this.sinceSlash < COMBO_WINDOW || sb.state === 'slash' ? (this.lastCombo + 1) % SLASHES.length : 0;
       // step in fully from out at the edge of reach, barely when already on top of it
-      v.saber.step = Math.max(0.2, Math.min(1.3, (dist - 18) / 14));
+      v.saber.step = Math.max(0.2, Math.min(1.8, (dist - 18) / 12));
       if (v.slash(next)) {
         this.wantSlash = false;
         this.lastCombo = next;
@@ -330,7 +330,7 @@ export class RobotGame {
         const c = this.kaijuCentre(_c);
         const at = _h.copy(_b).sub(c).setLength(13 * S * 0.8).add(c);
         at.y = Math.max(at.y, _b.y * 0.5 + at.y * 0.5);
-        this.hitKaiju(at, SLASH_DAMAGE[sb.combo], heavy ? RECOIL.finisher : RECOIL.slash, heavy ? 12 : 4);
+        this.hitKaiju(at, SLASH_DAMAGE[sb.combo], heavy ? RECOIL.finisher : RECOIL.slash, heavy ? 5 : 1.5);
         this.slashHits++;
         this.fx.impact(at, heavy ? 1.8 : 1.1, '#ff6ac8');
         this.fx.sparkBurst(at, heavy ? 40 : 20, 55);
