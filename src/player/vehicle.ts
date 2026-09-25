@@ -52,36 +52,41 @@ export const VEHICLES: Record<VehicleKind, VehicleSpec> = {
 // up: the upper body at the waist (x lean back +, y twist to the left +, z tilt)
 // st: stance 0..1 (hips drop, legs open front/back with the feet kept on the ground)
 // lunge: metres the body shifts forward over the front foot; hop: metres it rises
+// wp: wrist -- 0 holds the blade at right angles to the forearm (up, in the guard), -PI/2 lays it along the arm
 type V3 = [number, number, number];
-interface Pose { ra: V3; la: V3; up: V3; st: number; lunge: number; hop: number }
-const P = (ra: V3, la: V3, up: V3, st: number, lunge = 0, hop = 0): Pose => ({ ra, la, up, st, lunge, hop });
+interface Pose { ra: V3; la: V3; up: V3; st: number; lunge: number; hop: number; wp: number }
+const P = (ra: V3, la: V3, up: V3, st: number, lunge = 0, hop = 0, wp = 0): Pose => ({ ra, la, up, st, lunge, hop, wp });
 const REST_POSE = P([0, 0, 0], [0, 0, 0], [0, 0, 0], 0);
 const GUARD = P([1.15, 0.3, -0.15], [1.0, -0.45, 0.2], [-0.05, -0.2, 0], 0.35);
 const REACH = P([3.45, 0, 0.3], [0.35, 0, 0.15], [0.05, 0.25, -0.05], 0.15);
 /** The combo: a diagonal cut, a backhand sweep, a rising cut, a two-handed overhead finisher. */
 export const SLASHES: { name: string; dur: number; wind: Pose; strike: Pose; follow: Pose }[] = [
+  // diagonal: the blade leans over the shoulder, then cuts down across the body
   { name: '袈裟斬り', dur: 0.5,
-    wind: P([3.0, 0.5, -0.5], [2.2, -0.2, 0.3], [0.12, -0.6, -0.12], 0.45),
-    strike: P([1.0, -0.4, 0.35], [0.7, -0.5, 0.1], [-0.22, 0.45, 0.14], 0.8, 3),
-    follow: P([0.45, -0.8, 0.45], [0.35, -0.3, 0.2], [-0.28, 0.6, 0.16], 0.85, 3.5) },
+    wind: P([3.0, 0.5, -0.5], [2.2, -0.2, 0.3], [0.12, -0.6, -0.12], 0.45, 0, 0, -0.2),
+    strike: P([1.0, -0.4, 0.35], [0.7, -0.5, 0.1], [-0.22, 0.45, 0.14], 0.8, 3, 0, -0.9),
+    follow: P([0.6, -0.8, 0.45], [0.35, -0.3, 0.2], [-0.28, 0.6, 0.16], 0.85, 3.5, 0, -0.8) },
+  // horizontal: arm level, blade laid out along it, a flat arc from right to left at chest height
   { name: '横薙ぎ', dur: 0.5,
-    wind: P([1.6, -1.3, 0], [0.9, 0.7, -0.1], [0, 0.65, 0.05], 0.55),
-    strike: P([1.6, 0.35, 0], [0.5, -0.6, 0.4], [-0.1, -0.2, 0], 0.75, 2),
-    follow: P([1.5, 1.25, 0], [0.25, -0.9, 0.6], [-0.12, -0.7, -0.05], 0.7, 2.5) },
+    wind: P([1.5, -1.5, 0], [0.9, 0.7, -0.1], [0, 0.75, 0.05], 0.55, 0, 0, -1.35),
+    strike: P([1.55, 0.2, 0], [0.5, -0.6, 0.4], [-0.08, -0.25, 0], 0.75, 2, 0, -1.5),
+    follow: P([1.5, 1.5, 0], [0.25, -0.9, 0.6], [-0.1, -0.8, -0.05], 0.7, 2.5, 0, -1.45) },
+  // rising: blade trailing low behind, swept up past the face
   { name: '斬り上げ', dur: 0.5,
-    wind: P([0.35, -0.6, 0.45], [0.4, 0.3, 0.2], [-0.3, 0.3, 0.08], 1.0),
-    strike: P([2.1, 0.1, -0.2], [1.1, 0, 0.3], [0.05, -0.1, -0.05], 0.45, 2),
-    follow: P([3.0, 0.4, -0.3], [1.9, 0, 0.5], [0.22, -0.3, -0.1], 0.1, 2, 1.5) },
+    wind: P([0.55, -0.6, 0.45], [0.4, 0.3, 0.2], [-0.3, 0.3, 0.08], 1.0, 0, 0, -0.25),
+    strike: P([2.1, 0.1, -0.2], [1.1, 0, 0.3], [0.05, -0.1, -0.05], 0.45, 2, 0, -0.9),
+    follow: P([3.0, 0.4, -0.3], [1.9, 0, 0.5], [0.22, -0.3, -0.1], 0.1, 2, 1.5, -0.7) },
+  // overhead: blade back over the head, then straight down in line with the arms
   { name: '唐竹割り', dur: 0.75,
-    wind: P([3.55, 0.1, 0], [3.45, -0.25, -0.2], [0.28, 0, 0], 0.3, 0, 0.8),
-    strike: P([1.3, 0.1, 0], [1.25, -0.35, -0.15], [-0.4, 0, 0], 1.0, 5),
-    follow: P([0.75, 0.1, 0], [0.7, -0.35, -0.1], [-0.45, 0, 0], 1.0, 5.5) },
+    wind: P([3.55, 0.1, 0], [3.45, -0.25, -0.2], [0.28, 0, 0], 0.3, 0, 0.8, -0.3),
+    strike: P([1.3, 0.1, 0], [1.25, -0.35, -0.15], [-0.4, 0, 0], 1.0, 5, 0, -1.0),
+    follow: P([0.95, 0.1, 0], [0.9, -0.35, -0.1], [-0.4, 0, 0], 1.0, 5.5, 0, -0.45) },
 ];
 const lerpV = (a: V3, b: V3, k: number): V3 => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 const ease = (k: number) => { const x = Math.max(0, Math.min(1, k)); return x * x * (3 - 2 * x); };
 const blend = (a: Pose, b: Pose, k: number): Pose => ({
   ra: lerpV(a.ra, b.ra, k), la: lerpV(a.la, b.la, k), up: lerpV(a.up, b.up, k),
-  st: a.st + (b.st - a.st) * k, lunge: a.lunge + (b.lunge - a.lunge) * k, hop: a.hop + (b.hop - a.hop) * k,
+  st: a.st + (b.st - a.st) * k, lunge: a.lunge + (b.lunge - a.lunge) * k, hop: a.hop + (b.hop - a.hop) * k, wp: a.wp + (b.wp - a.wp) * k,
 });
 /** Robot leg: hip -> knee -> ankle, and the ankle's height above the sole. */
 const THIGH = 3.9, SHIN = 3.9, ANKLE = 1.2, HIP = 9;
@@ -595,6 +600,7 @@ export class Vehicle {
     ra.rotation.set(key.ra[0], key.ra[1], key.ra[2]);
     la.rotation.set(key.la[0], key.la[1], key.la[2]);
     p.upper?.rotation.set(key.up[0], key.up[1], key.up[2]);
+    if (p.saberHand) p.saberHand.rotation.x = key.wp; // the wrist
     // ---- footwork -------------------------------------------------------------------
     // Feet are placed in the robot's local z (forward -).  During a cut the front
     // foot lifts, swings forward and plants while the robot itself moves forward
