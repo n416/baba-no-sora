@@ -47,6 +47,12 @@ export const VEHICLES: Record<VehicleKind, VehicleSpec> = {
   keiTruck: { name: '軽トラ', maxSpeed: 11, boost: 1.2, accel: 2.6, brake: 7, reverse: 2.5, turnRate: 0.9, eyeHeight: 1.45, seatBack: -0.9, wheelRadius: 0.3, radius: 1.2, lean: 0, chase: { dist: 7.5, height: 3.0 } },
 };
 
+/** Robot rifle arm: how far it swings either side of the body (rad), its pitch range, and its speed (rad/s). */
+const ARM_YAW = THREE.MathUtils.degToRad(40);
+const ARM_PITCH: [number, number] = [THREE.MathUtils.degToRad(-60), THREE.MathUtils.degToRad(55)];
+const ARM_RATE = 3.2;
+const _sh = new THREE.Vector3();
+
 export interface VehicleBody {
   root: THREE.Group; // origin on the ground between the wheels, front toward -z
   body: THREE.Group; // what leans
@@ -327,14 +333,14 @@ function buildRobot(): VehicleBody {
     arm.add(box(2.0, 3.6, 2.2, cream, 0, -7.9, 0)); // forearm
     arm.add(box(1.6, 1.4, 1.6, dark, 0, -9.2, 0)); // hand
     if (s > 0) {
-      // beam rifle along the forearm, pointing forward
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.5, 5.5, 10), steel);
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set(0.9, -6.6, -2.4);
+      // beam rifle along the outside of the forearm: it points wherever the arm points
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.5, 6.0, 10), steel);
+      barrel.position.set(1.2, -8.4, -0.3);
       arm.add(barrel);
-      arm.add(box(1.0, 1.0, 2.2, teal, 0.9, -7.1, -0.4));
+      arm.add(box(1.0, 2.4, 1.2, teal, 1.2, -7.4, -0.3)); // housing
+      arm.add(box(0.7, 0.4, 0.7, M('#8ff4ff'), 1.2, -11.6, -0.3)); // emitter
       muzzle = new THREE.Object3D();
-      muzzle.position.set(0.9, -6.6, -5.3);
+      muzzle.position.set(1.2, -11.6, -0.3);
       arm.add(muzzle);
     }
     body.add(arm);
@@ -372,8 +378,22 @@ export class Vehicle {
   thrust = 0;
   private stride = 0;
   aim = 0;
+  /** What the rifle arm is trying to point at, and for how much longer (s). */
+  readonly aimTarget = new THREE.Vector3();
+  aimHold = 0;
+  /** Current rifle-arm angles relative to the body (rad): swing left/right, up/down. */
+  private armYaw = 0;
+  private armPitch = 0;
   /** Knock-back velocity (robot), decays. */
   readonly push = new THREE.Vector3();
+
+  /** World direction the rifle points (robot only; falls back to the body's facing). */
+  muzzleDir(out: THREE.Vector3) {
+    const m = this.parts.muzzle;
+    if (!m) return out.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    m.updateWorldMatrix(true, false);
+    return out.set(0, -1, 0).transformDirection(m.matrixWorld); // the barrel runs down the arm (-y)
+  }
 
   /** World position of the beam muzzle (robot only; falls back to the chest). */
   muzzle(out: THREE.Vector3) {
@@ -451,9 +471,29 @@ export class Vehicle {
       p.legs[1].rotation.x = -swing + air * 0.35;
       p.arms[0].rotation.x = -swing * 0.8 - air * 0.3;
       p.arms[0].rotation.z = -air * 0.25;
-      // the right arm (rifle) comes up to level when firing
-      this.aim = Math.max(0, this.aim - dt * 1.5);
-      p.arms[1].rotation.x = swing * 0.8 * (1 - this.aim) + this.aim * (Math.PI / 2 - 0.05) - air * 0.3 * (1 - this.aim);
+      // the right arm (rifle) comes up and tracks the target, as far as a shoulder turns
+      if (this.aimHold > 0) {
+        this.aimHold -= dt;
+        this.aim = Math.min(1, this.aim + dt * 4);
+        const sh = p.arms[1].getWorldPosition(_sh);
+        const dx = this.aimTarget.x - sh.x, dy = this.aimTarget.y - sh.y, dz = this.aimTarget.z - sh.z;
+        let yaw = Math.atan2(-dx, -dz) - this.yaw;
+        while (yaw > Math.PI) yaw -= Math.PI * 2;
+        while (yaw < -Math.PI) yaw += Math.PI * 2;
+        const wantYaw = Math.max(-ARM_YAW, Math.min(ARM_YAW, yaw));
+        const wantPitch = Math.max(ARM_PITCH[0], Math.min(ARM_PITCH[1], Math.atan2(dy, Math.hypot(dx, dz)) - p.body.rotation.x));
+        const step = ARM_RATE * dt;
+        this.armYaw += Math.max(-step, Math.min(step, wantYaw - this.armYaw));
+        this.armPitch += Math.max(-step, Math.min(step, wantPitch - this.armPitch));
+      } else {
+        this.aim = Math.max(0, this.aim - dt * 1.5);
+        this.armYaw *= 1 - Math.min(1, dt * 3);
+        this.armPitch *= 1 - Math.min(1, dt * 3);
+      }
+      const rest = swing * 0.8 - air * 0.3;
+      p.arms[1].rotation.order = 'YXZ'; // yaw the raised arm about the shoulder, then pitch it
+      p.arms[1].rotation.x = rest * (1 - this.aim) + this.aim * (Math.PI / 2 + this.armPitch);
+      p.arms[1].rotation.y = this.aim * this.armYaw;
       p.body.position.y = air ? 0 : Math.abs(Math.cos(this.stride)) * Math.min(0.5, Math.abs(this.speed) * 0.05);
       p.body.rotation.x = air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0; // lean into flight
       if (p.flames && p.thrusterMat) {

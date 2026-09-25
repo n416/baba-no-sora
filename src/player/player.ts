@@ -82,6 +82,8 @@ export class Player {
       this.vehicle.vy = 0;
       this.vehicle.push.set(0, 0, 0);
       this.vehicle.thrust = 0;
+      this.vehicle.aim = 0;
+      this.vehicle.aimHold = 0;
       this.cruise = false;
       if (this.mode === 'walk') {
         // park it beside the start so it can be found

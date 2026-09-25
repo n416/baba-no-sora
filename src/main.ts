@@ -148,7 +148,7 @@ function step(dt: number) {
   player.update(dt);
   world.update(dt);
   if (game) {
-    if (firing || xrFire()) game.fire(camera) && (player.vehicle!.aim = 1);
+    if (firing || xrFire()) game.fire(camera);
     game.update(dt, camera);
   }
   if (!xr.presenting) player.applyCamera(rig, camera);
@@ -253,7 +253,7 @@ function updateHint() {
   const kmh = v ? Math.round(Math.abs(v.speed) * 3.6) : 0;
   if (player.mode === 'walk' && v && cfg.mobility === 'both' && player.pos.distanceTo(v.pos) < 3.2) hud.hint(`F で${v.spec.name}に乗る`);
   else if (player.mode === 'ride' && v?.spec.robot) {
-    hud.hint(`${v.airborne ? `飛行中  高度 ${Math.round(v.pos.y)} m` : '歩行'} ／ W S 前後 / A D 旋回 / マウス 照準 / 左クリック ビーム\nShift ダッシュ / Space・E バーニア上昇 / Q 降下 / F 降りる`);
+    hud.hint(`${v.airborne ? `飛行中  高度 ${Math.round(v.pos.y)} m` : '歩行'} ／ W S 前後 / A D 旋回 / マウス 照準 / 左クリック ビーム（腕と体がターゲットへ向く。後ろは撃てない）\nShift ダッシュ / Space・E バーニア上昇 / Q 降下 / F 降りる`);
   } else if (player.mode === 'ride' && v?.spec.flight) {
     const f = v.spec.flight;
     if (player.cruise) hud.hint(`遊覧飛行中  ${kmh} km/h  高度 ${Math.round(v.pos.y)} m  ／ C 手動に戻す`);

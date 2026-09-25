@@ -22,6 +22,12 @@ const KAIJU_HP = 100;
 const BEAM_DAMAGE_KAIJU = 5;
 const BEAM_RANGE = 600;
 const BEAM_COOLDOWN = 0.18;
+/** Targets further round than this from the robot's facing cannot be fired at (it turns first). */
+const FIRE_ARC = THREE.MathUtils.degToRad(100);
+/** How fast the body swings round toward what it is aiming at (rad/s). */
+const AIM_TURN = 1.5;
+/** How long the rifle arm stays up after the trigger is released (s). */
+const AIM_HOLD = 0.9;
 /** The kaiju model is authored ~28 m tall; this makes it tower over the zakkyo (~45 m). */
 const S = 1.6;
 
@@ -62,6 +68,7 @@ export class RobotGame {
   private hitFlash = 0;
   private near: import('../world/world').Destructible[] = [];
   private ray = new THREE.Ray();
+  private warnAt = -10;
 
   constructor(world: World, player: Player, hud: GameHud) {
     this.world = world;
@@ -83,31 +90,37 @@ export class RobotGame {
     return this.player.mode === 'ride' && !!this.player.vehicle?.spec.robot;
   }
 
-  /** Fire the beam from the robot's muzzle toward where the camera looks. */
+  /**
+   * Pull the trigger.  The pilot aims with the camera (or `aimAt` in tests); the
+   * robot raises its rifle arm, swings it toward that point as far as the arm
+   * reaches, and turns its body round after it.  The beam goes where the rifle
+   * actually points -- near the target while the body is still turning, dead on
+   * once it has caught up.  Anything more than FIRE_ARC behind cannot be shot at.
+   */
   fire(camera: THREE.Camera, aimAt?: THREE.Vector3) {
-    if (!this.robotActive || this.cooldown > 0 || this.phase === 'cleared') return false;
-    this.cooldown = BEAM_COOLDOWN;
+    if (!this.robotActive || this.phase === 'cleared') return false;
     const v = this.player.vehicle!;
-    camera.getWorldPosition(this.ray.origin);
-    if (aimAt) this.ray.direction.copy(aimAt).sub(this.ray.origin).normalize(); // scripted aim (tests)
-    else camera.getWorldDirection(this.ray.direction);
-    // what the crosshair is on: kaiju, a building, or the ground
-    let end = this.ray.at(BEAM_RANGE, new THREE.Vector3());
-    let tBest = BEAM_RANGE;
-    let target: 'kaiju' | number | null = null;
-    if (this.kaiju.root.visible && (this.phase === 'fighting' || this.phase === 'rising')) {
-      const c = _c.copy(this.kPos).setY(this.kPos.y + 16 * S);
-      const hit = this.ray.intersectSphere(_s.set(c, 13 * S), _h);
-      if (hit) { const t = hit.distanceTo(this.ray.origin); if (t < tBest) { tBest = t; target = 'kaiju'; end = hit.clone(); } }
+    // 1. what the pilot is aiming at: the first thing along the camera ray
+    if (aimAt) v.aimTarget.copy(aimAt);
+    else {
+      camera.getWorldPosition(this.ray.origin);
+      camera.getWorldDirection(this.ray.direction);
+      v.aimTarget.copy(this.trace(this.ray).end);
     }
-    const b = this.destruction.raycast(this.ray, tBest);
-    if (b) { tBest = b.t; target = b.d.id; end = this.ray.at(b.t, new THREE.Vector3()); }
-    if (this.ray.direction.y < -0.01) {
-      const tg = -this.ray.origin.y / this.ray.direction.y;
-      if (tg > 0 && tg < tBest) { tBest = tg; target = null; end = this.ray.at(tg, new THREE.Vector3()); }
+    v.aimHold = AIM_HOLD;
+    // 2. behind the robot: refuse (it is already turning toward it)
+    const rel = wrap(Math.atan2(-(v.aimTarget.x - v.pos.x), -(v.aimTarget.z - v.pos.z)) - v.yaw);
+    if (Math.abs(rel) > FIRE_ARC) {
+      if (this.t - this.warnAt > 1.5) { this.warnAt = this.t; this.hud.toast('後ろには撃てない — 旋回中'); }
+      return false;
     }
-    // draw it from the muzzle
-    const from = v.muzzle(new THREE.Vector3());
+    if (this.cooldown > 0 || v.aim < 0.9) return false; // rifle still coming up
+    this.cooldown = BEAM_COOLDOWN;
+    // 3. shoot along the rifle as it points right now
+    v.muzzle(this.ray.origin);
+    v.muzzleDir(this.ray.direction);
+    const { end, target } = this.trace(this.ray);
+    const from = this.ray.origin.clone();
     this.spawnBeam(from, end);
     this.flash.position.copy(end);
     this.flash.intensity = 400;
@@ -126,6 +139,25 @@ export class RobotGame {
     return true;
   }
 
+  /** First thing a ray meets: the kaiju, a standing building, or the ground. */
+  private trace(ray: THREE.Ray) {
+    let end = ray.at(BEAM_RANGE, new THREE.Vector3());
+    let tBest = BEAM_RANGE;
+    let target: 'kaiju' | number | null = null;
+    if (this.kaiju.root.visible && (this.phase === 'fighting' || this.phase === 'rising')) {
+      const c = _c.copy(this.kPos).setY(this.kPos.y + 16 * S);
+      const hit = ray.intersectSphere(_s.set(c, 13 * S), _h);
+      if (hit) { const t = hit.distanceTo(ray.origin); if (t < tBest) { tBest = t; target = 'kaiju'; end = hit.clone(); } }
+    }
+    const b = this.destruction.raycast(ray, tBest);
+    if (b) { tBest = b.t; target = b.d.id; end = ray.at(b.t, new THREE.Vector3()); }
+    if (ray.direction.y < -0.01) {
+      const tg = -ray.origin.y / ray.direction.y;
+      if (tg > 0 && tg < tBest) { tBest = tg; target = null; end = ray.at(tg, new THREE.Vector3()); }
+    }
+    return { end, target };
+  }
+
   /** The robot rammed or stomped something. */
   crush(id: number) {
     this.destruction.damage(id, 99);
@@ -133,6 +165,12 @@ export class RobotGame {
 
   update(dt: number, camera: THREE.Camera) {
     this.t += dt;
+    // while aiming, the body swings round toward the target (the camera does not: the pilot keeps the view)
+    const v = this.player.vehicle;
+    if (v && this.robotActive && v.aimHold > 0) {
+      const d = wrap(Math.atan2(-(v.aimTarget.x - v.pos.x), -(v.aimTarget.z - v.pos.z)) - v.yaw);
+      if (Math.abs(d) > 0.01) v.yaw += Math.sign(d) * Math.min(Math.abs(d), AIM_TURN * dt);
+    }
     this.cooldown = Math.max(0, this.cooldown - dt);
     this.flash.intensity *= Math.pow(0.001, dt);
     this.destruction.update(dt);
@@ -342,4 +380,9 @@ export class RobotGame {
 }
 
 const _c = new THREE.Vector3(), _h = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+function wrap(a: number) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
 const _s = new THREE.Sphere();
