@@ -883,6 +883,8 @@ export class Vehicle {
       const armA = air ? -(0.15 + 0.35 * fwd) : -swing * 0.8;
       p.arms[0].rotation.x += (armA - p.arms[0].rotation.x) * Math.min(1, dt * 6);
       p.arms[0].rotation.z += ((air ? -0.18 : 0) - p.arms[0].rotation.z) * Math.min(1, dt * 6);
+      // lean into flight -- set before the rifle aims, which compensates for it
+      p.body.rotation.x = air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0;
       let saberBody = { drop: 0, lunge: 0, hop: 0 };
       if (this.saber.state !== 'stowed') {
         // moving or airborne, the legs keep walking / trailing and the stance gives way
@@ -922,7 +924,6 @@ export class Vehicle {
       p.body.position.set(0, bob - saberBody.drop + saberBody.hop, -saberBody.lunge);
       p.root.position.set(this.pos.x, this.pos.y, this.pos.z); // the saber step moved pos this frame
       this.gripLeft(this.saber.state === 'stowed' ? 0 : this.poseNow.two * (p.saberHand?.visible ? 1 : 0));
-      p.body.rotation.x = air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0; // lean into flight
       if (p.flames && p.thrusterMat) {
         for (const f of p.flames) f.scale.set(0.6 + this.thrust * 0.5, 0.001 + this.thrust * (1 + Math.random() * 0.25), 0.6 + this.thrust * 0.5);
         p.thrusterMat.emissiveIntensity = this.thrust * 2;
