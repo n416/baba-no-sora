@@ -53,6 +53,8 @@ export const VEHICLES: Record<VehicleKind, VehicleSpec> = {
 // st: stance 0..1 (hips drop, legs open front/back with the feet kept on the ground)
 // lunge: metres the body shifts forward over the front foot; hop: metres it rises
 // wp: wrist -- 0 holds the blade at right angles to the forearm (up, in the guard), -PI/2 lays it along the arm
+// The arm's direction in the world is the upper-body twist PLUS the arm's ry: they must turn the same way
+// through a cut, or they cancel (the horizontal sweep once only covered 83 degrees because of that).
 type V3 = [number, number, number];
 interface Pose { ra: V3; la: V3; up: V3; st: number; lunge: number; hop: number; wp: number }
 const P = (ra: V3, la: V3, up: V3, st: number, lunge = 0, hop = 0, wp = 0): Pose => ({ ra, la, up, st, lunge, hop, wp });
@@ -63,14 +65,14 @@ const REACH = P([3.45, 0, 0.3], [0.35, 0, 0.15], [0.05, 0.25, -0.05], 0.15);
 export const SLASHES: { name: string; dur: number; wind: Pose; strike: Pose; follow: Pose }[] = [
   // diagonal: the blade leans over the shoulder, then cuts down across the body
   { name: '袈裟斬り', dur: 0.5,
-    wind: P([3.0, 0.5, -0.5], [2.2, -0.2, 0.3], [0.12, -0.6, -0.12], 0.45, 0, 0, -0.2),
-    strike: P([1.0, -0.4, 0.35], [0.7, -0.5, 0.1], [-0.22, 0.45, 0.14], 0.8, 3, 0, -0.9),
-    follow: P([0.6, -0.8, 0.45], [0.35, -0.3, 0.2], [-0.28, 0.6, 0.16], 0.85, 3.5, 0, -0.8) },
+    wind: P([3.0, -0.45, -0.5], [2.2, -0.3, 0.3], [0.12, -0.6, -0.12], 0.45, 0, 0, -0.2),
+    strike: P([1.0, 0.35, 0.35], [0.7, -0.2, 0.1], [-0.22, 0.4, 0.14], 0.8, 3, 0, -0.9),
+    follow: P([0.85, 0.75, 0.45], [0.45, 0.2, 0.2], [-0.24, 0.6, 0.16], 0.85, 3.5, 0, -0.45) },
   // horizontal: arm level, blade laid out along it, a flat arc from right to left at chest height
   { name: '横薙ぎ', dur: 0.5,
-    wind: P([1.5, -1.5, 0], [0.9, 0.7, -0.1], [0, 0.75, 0.05], 0.55, 0, 0, -1.35),
-    strike: P([1.55, 0.2, 0], [0.5, -0.6, 0.4], [-0.08, -0.25, 0], 0.75, 2, 0, -1.5),
-    follow: P([1.5, 1.5, 0], [0.25, -0.9, 0.6], [-0.1, -0.8, -0.05], 0.7, 2.5, 0, -1.45) },
+    wind: P([1.5, -1.2, 0], [1.2, -0.9, 0.1], [0.02, -0.65, 0.06], 0.6, 0, 0, -1.4),
+    strike: P([1.55, 0.0, 0], [0.8, -0.2, 0.3], [-0.1, 0.0, 0], 0.8, 2, 0, -1.5),
+    follow: P([1.5, 1.2, 0], [0.4, 0.9, 0.5], [-0.08, 0.75, -0.06], 0.75, 2.5, 0, -1.45) },
   // rising: blade trailing low behind, swept up past the face
   { name: '斬り上げ', dur: 0.5,
     wind: P([0.55, -0.6, 0.45], [0.4, 0.3, 0.2], [-0.3, 0.3, 0.08], 1.0, 0, 0, -0.25),
