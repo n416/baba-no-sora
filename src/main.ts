@@ -12,6 +12,7 @@ import { SeasonalParticles } from './world/particles';
 import { COURSE, type Viewpoint } from './world/course';
 import { cruiseNearest } from './world/cruise';
 import { RobotGame } from './game/game';
+import { sfx } from './audio/sfx';
 import { Player } from './player/player';
 import { XRSupport } from './xr/xr';
 import { Hud } from './ui/hud';
@@ -67,9 +68,11 @@ const hud = new Hud(tod, cfg);
 // robot mode (?vehicle=robot): beams, verniers, a kaiju
 const game = player.vehicle?.spec.robot ? new RobotGame(world, player, hud) : null;
 if (game) player.onCrush = (id) => game.crush(id);
+player.onLand = (vy) => { const v = player.vehicle; if (v) sfx.robotStep(v.pos, Math.min(3, 1 + vy * 0.1)); };
 let firing = false;
 const xr = new XRSupport(renderer, rig, camera, player, tod);
 xr.onSession((on) => {
+  if (on) sfx.unlock(); // entering VR is a user gesture
   // VR quality preset: smaller shadow map; the post pass switches itself off
   sun.shadow.mapSize.setScalar(on ? 1024 : 2048);
   sun.shadow.map?.dispose();
@@ -151,6 +154,10 @@ function step(dt: number) {
     if (firing || xrFire()) game.fire(camera);
     game.update(dt, camera);
   }
+  // ears on the camera; the loops follow what is being ridden
+  sfx.listen(camera);
+  const rv = player.mode === 'ride' ? player.vehicle : null;
+  sfx.loops(rv?.spec.robot ? rv.thrust : 0, rv?.spec.flight ? rv.speed : null, rv?.airborne ? Math.abs(rv.speed) : 0);
   if (!xr.presenting) player.applyCamera(rig, camera);
   xr.update(dt);
   applyLook();
@@ -180,7 +187,7 @@ resize();
 
 // ---- input -----------------------------------------------------------------
 const canvas = renderer.domElement;
-const start = () => { if (!xr.presenting) canvas.requestPointerLock(); };
+const start = () => { sfx.unlock(); if (!xr.presenting) canvas.requestPointerLock(); };
 document.getElementById('start')!.addEventListener('click', start);
 canvas.addEventListener('click', start);
 document.addEventListener('pointerlockchange', () => {
@@ -196,6 +203,7 @@ function xrFire() { return xr.presenting && !!player.xrInput?.fire; }
 let hintOn = true;
 window.addEventListener('keydown', (e) => {
   if (!player.locked) return;
+  sfx.unlock();
   player.keys.add(e.code);
   switch (e.code) {
     case 'KeyF':
@@ -231,6 +239,9 @@ window.addEventListener('keydown', (e) => {
       break;
     case 'KeyH':
       hintOn = !hintOn;
+      break;
+    case 'KeyM':
+      hud.toast(sfx.toggleMute() ? '効果音 ON' : '効果音 OFF');
       break;
   }
 });
@@ -385,6 +396,7 @@ const api = {
     return out;
   },
   game,
+  sfx,
   /** Fly the loop, then descend onto the runway by hand-coded inputs and check it lands. */
   autoLand() {
     const v = player.vehicle;

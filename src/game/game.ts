@@ -4,6 +4,7 @@ import type { Player } from '../player/player';
 import { Destruction } from './destruction';
 import { buildKaiju, type KaijuBody } from './kaiju';
 import { COURSE } from '../world/course';
+import { sfx } from '../audio/sfx';
 
 /**
  * Robot mode's game loop:
@@ -69,6 +70,8 @@ export class RobotGame {
   private near: import('../world/world').Destructible[] = [];
   private ray = new THREE.Ray();
   private warnAt = -10;
+  private robotSteps = 0;
+  private kaijuSteps = 0;
 
   constructor(world: World, player: Player, hud: GameHud) {
     this.world = world;
@@ -122,6 +125,9 @@ export class RobotGame {
     const { end, target } = this.trace(this.ray);
     const from = this.ray.origin.clone();
     this.spawnBeam(from, end);
+    sfx.beam(from);
+    if (target === 'kaiju') sfx.hitKaiju(end);
+    else sfx.impact(end);
     this.flash.position.copy(end);
     this.flash.intensity = 400;
     if (target === 'kaiju') {
@@ -167,6 +173,12 @@ export class RobotGame {
     this.t += dt;
     // while aiming, the body swings round toward the target (the camera does not: the pilot keeps the view)
     const v = this.player.vehicle;
+    // robot footfalls: one thud per half stride on the ground
+    if (v && this.robotActive) {
+      const n = v.stepCount;
+      if (n !== this.robotSteps && !v.airborne && Math.abs(v.speed) > 0.5) sfx.robotStep(v.pos, Math.min(1.6, 0.6 + Math.abs(v.speed) * 0.08));
+      this.robotSteps = n;
+    }
     if (v && this.robotActive && v.aimHold > 0) {
       const d = wrap(Math.atan2(-(v.aimTarget.x - v.pos.x), -(v.aimTarget.z - v.pos.z)) - v.yaw);
       if (Math.abs(d) > 0.01) v.yaw += Math.sign(d) * Math.min(Math.abs(d), AIM_TURN * dt);
@@ -209,6 +221,7 @@ export class RobotGame {
     this.hud.gauge(null);
     this.hud.counter(`破壊 0 / ${SUMMON}`);
     this.hud.toast('街がもとに戻った');
+    sfx.chime();
   }
 
   // ---- phases ------------------------------------------------------------------
@@ -233,6 +246,7 @@ export class RobotGame {
     this.hud.gauge(1);
     this.hud.counter('');
     this.hud.toast('怪獣が現れた！');
+    sfx.roar(this.kPos.clone().setY(20));
   }
 
   private updateRising(dt: number) {
@@ -242,7 +256,7 @@ export class RobotGame {
     this.crushUnderfoot(16 * S);
     this.kaiju.jaw.rotation.x = 0.5 * Math.sin(this.t * 6) * (1 - k);
     this.poseKaiju(dt, 0);
-    if (k >= 1) { this.phase = 'fighting'; this.t = 0; this.breath = 0; }
+    if (k >= 1) { this.phase = 'fighting'; this.t = 0; this.breath = -0.5; }
   }
 
   private updateFighting(dt: number) {
@@ -260,6 +274,7 @@ export class RobotGame {
     this.kPos.z += -Math.cos(this.kYaw) * speed * dt;
     this.crushUnderfoot(11 * S);
     // plasma: charge 2.2 s (spines and mouth blaze), then fire at the robot's chest
+    if (this.breath < 0 && this.breath + dt >= 0 && dist < 260) sfx.charge(this.kPos.clone().setY(36), 2.2);
     this.breath += dt;
     const charge = Math.min(1, this.breath / 2.2);
     this.kaiju.glow.emissiveIntensity = 0.8 + charge * 2.5;
@@ -271,6 +286,7 @@ export class RobotGame {
       const orb = new THREE.Mesh(new THREE.SphereGeometry(2.2, 12, 10), this.orbMat);
       orb.position.copy(from);
       this.world.group.add(orb);
+      sfx.plasma(from);
       this.orbs.push({ mesh: orb, v: to.sub(from).normalize().multiplyScalar(34), life: 7 });
     }
     this.poseKaiju(dt, speed);
@@ -281,6 +297,8 @@ export class RobotGame {
     this.t = 0;
     this.hud.gauge(0);
     this.hud.toast('怪獣を倒した！');
+    sfx.roar(this.kPos.clone().setY(20), true);
+    sfx.impact(this.kPos.clone().setY(10), true);
     for (const o of this.orbs) o.mesh.removeFromParent();
     this.orbs.length = 0;
   }
@@ -313,6 +331,9 @@ export class RobotGame {
   private poseKaiju(dt: number, speed: number) {
     const k = this.kaiju;
     this.walkPhase += speed * dt * 0.28;
+    const steps = Math.floor(this.walkPhase / Math.PI);
+    if (steps !== this.kaijuSteps && speed > 0) sfx.kaijuStep(this.kPos);
+    this.kaijuSteps = steps;
     const swing = speed > 0 ? Math.sin(this.walkPhase) * 0.45 : 0;
     k.legs[0].rotation.x += (swing - k.legs[0].rotation.x) * Math.min(1, dt * 6);
     k.legs[1].rotation.x += (-swing - k.legs[1].rotation.x) * Math.min(1, dt * 6);
@@ -366,11 +387,12 @@ export class RobotGame {
         // hit: knock the robot back and up, no damage model -- it is a shove, not a fail state
         this.player.knockback(o.v.x * 0.5, 9, o.v.z * 0.5);
         this.destruction.puff(o.mesh.position.clone(), 7, 1.2);
+        sfx.impact(o.mesh.position, true);
         this.hud.toast('被弾！');
         done = true;
       }
       if (done) {
-        if (o.mesh.position.y < 1) this.destruction.puff(o.mesh.position.clone().setY(2), 6, 1.5);
+        if (o.mesh.position.y < 1) { this.destruction.puff(o.mesh.position.clone().setY(2), 6, 1.5); sfx.impact(o.mesh.position, true); }
         o.mesh.removeFromParent();
         o.mesh.geometry.dispose();
         this.orbs.splice(i, 1);

@@ -47,6 +47,7 @@ src/
   ui/hud.ts            開始カード・時刻スライダー・ヒント・トースト・怪獣の体力ゲージ・破壊カウンター
   game/destruction.ts  建物の崩壊（bake 済みメッシュの頂点範囲を書き換える）、瓦礫と土煙（InstancedMesh 2 つ）、restoreAll()
   game/kaiju.ts        怪獣のモデル（架空。脚・尻尾・顎がピボット、頭上の VR 用ゲージ）
+  audio/sfx.ts         効果音（Web Audio でその場で合成、ファイル無し）。unlock() までは無音。`__scene.sfx.selfTest()` で全音をオフライン描画して peak/RMS を確認、`sfx.counts` で呼ばれた回数
   game/game.ts         ロボットモードの進行: ビーム → 6 棟で怪獣出現 → 撃破 → 街とロボットを元に戻す
 scripts/shoot.mjs      Critic 用撮影 (Playwright)
 scripts/explore.mjs    回帰テスト (Playwright)

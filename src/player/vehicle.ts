@@ -378,6 +378,10 @@ export class Vehicle {
   thrust = 0;
   private stride = 0;
   aim = 0;
+  /** Half-strides taken so far (a footfall each time it changes). */
+  get stepCount() {
+    return Math.floor(this.stride / Math.PI);
+  }
   /** What the rifle arm is trying to point at, and for how much longer (s). */
   readonly aimTarget = new THREE.Vector3();
   aimHold = 0;

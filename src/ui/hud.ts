@@ -36,7 +36,7 @@ export class Hud {
       link.addEventListener('click', (e) => e.stopPropagation());
       if (robot) {
         const p = document.querySelector('#start p:nth-of-type(2)');
-        if (p) p.innerHTML = 'W S 前後 ／ A D 旋回 ／ マウス 照準 ／ <b>左クリック ビーム</b><br />Shift ダッシュ ／ <b>Space・E バーニア上昇</b> ／ Q 降下<br />建物を 6 棟壊すと怪獣が来る。倒すと街が元に戻る';
+        if (p) p.innerHTML = 'W S 前後 ／ A D 旋回 ／ マウス 照準 ／ <b>左クリック ビーム</b><br />Shift ダッシュ ／ <b>Space・E バーニア上昇</b> ／ Q 降下<br />M 効果音 ON/OFF<br />建物を 6 棟壊すと怪獣が来る。倒すと街が元に戻る';
       }
     }
     this.slider.addEventListener('input', () => {

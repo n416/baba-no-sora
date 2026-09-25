@@ -43,6 +43,8 @@ export class Player {
   airHits = 0;
   /** Robot: called with a destructible's id when the robot rams or lands on it. */
   onCrush: ((id: number) => void) | null = null;
+  /** Robot: touched down after a fall (vy is the downward speed, m/s). */
+  onLand: ((vy: number) => void) | null = null;
   readonly keys = new Set<string>();
   xrInput: DriveInput | null = null;
   /** Camera pose this frame (world), set by update(). */
@@ -338,6 +340,7 @@ export class Player {
     if (v.pos.y <= floor) {
       // a hard landing on a building flattens it
       if (v.vy < -12) for (const c of this.world.colliders) if (c.bid && !c.off && Math.abs(c.top - floor) < 0.5 && v.pos.x > c.x0 && v.pos.x < c.x1 && v.pos.z > c.z0 && v.pos.z < c.z1) this.onCrush?.(c.bid);
+      if (v.airborne && v.vy < -4) this.onLand?.(-v.vy);
       v.pos.y = floor;
       v.vy = Math.max(0, v.vy);
       v.airborne = false;

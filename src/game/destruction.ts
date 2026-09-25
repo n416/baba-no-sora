@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { World, Destructible } from '../world/world';
 import { cel } from '../render/toon';
 import { rng } from '../core/util';
+import { sfx } from '../audio/sfx';
 
 /**
  * Knocking buildings down, and putting them back.
@@ -78,6 +79,7 @@ export class Destruction {
     const b = d.box, c = b.getCenter(this.sv.set(0, 0, 0)).clone();
     const w = b.max.x - b.min.x, dd = b.max.z - b.min.z, h = b.max.y - b.min.y;
     for (let i = 0; i < 18; i++) this.puff(new THREE.Vector3(b.min.x + this.r.next() * w, this.r.range(0, 3), b.min.z + this.r.next() * dd), Math.max(w, dd) * 0.25 + this.r.range(2, 5), this.r.range(1.6, 2.6));
+    sfx.collapse(c, h);
     this.burst(new THREE.Vector3(c.x, b.min.y + h * 0.7, c.z), d.colour, Math.min(70, 24 + Math.floor(h)), Math.max(w, dd) * 0.5, 1.6);
     this.heap(b, d.colour, Math.min(40, 10 + Math.floor(w * dd / 12)));
     return true;
