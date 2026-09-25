@@ -83,9 +83,31 @@ const blend = (a: Pose, b: Pose, k: number): Pose => ({
   ra: lerpV(a.ra, b.ra, k), la: lerpV(a.la, b.la, k), up: lerpV(a.up, b.up, k),
   st: a.st + (b.st - a.st) * k, lunge: a.lunge + (b.lunge - a.lunge) * k, hop: a.hop + (b.hop - a.hop) * k,
 });
-/** Leg length (hip to sole) of the robot: a stance of hip drop h opens the legs to acos(1 - h/L). */
-const LEG = 9;
-const MAX_DROP = 2.6;
+/** Robot leg: hip -> knee -> ankle, and the ankle's height above the sole. */
+const THIGH = 3.9, SHIN = 3.9, ANKLE = 1.2, HIP = 9;
+/** Where the feet stand in the guard (local z, forward is -): left foot leads. */
+const GUARD_FRONT = -2.4, GUARD_BACK = 2.8;
+/** How far each cut steps in (m), before the game scales it by how close the kaiju already is. */
+const STEP_IN = [4.5, 3.2, 3.2, 5.5];
+/** Share of a step the body itself travels (the rest is the front foot's reach). */
+const BODY_SHARE = 0.45;
+/** The furthest the front foot reaches / the rear foot trails (m), and the deepest the hips go (m). */
+const FRONT_MAX = 6.8, BACK_MAX = 6.0, MAX_LUNGE = 3.2;
+
+/**
+ * Two-bone IK in the leg's plane: angles for hip and knee that put the ankle at
+ * (z, y) relative to the hip.  Forward is -z; +x rotation swings a limb forward.
+ * The knee always bends forward, like a person's.
+ */
+function legIK(z: number, y: number) {
+  const reach = THIGH + SHIN - 0.02;
+  let c = Math.hypot(z, y);
+  if (c > reach) c = reach;
+  const toTarget = Math.atan2(-z, -y); // 0 = straight down, + = forward
+  const hipOpen = Math.acos(Math.max(-1, Math.min(1, (THIGH * THIGH + c * c - SHIN * SHIN) / (2 * THIGH * c))));
+  const kneeIn = Math.acos(Math.max(-1, Math.min(1, (THIGH * THIGH + SHIN * SHIN - c * c) / (2 * THIGH * SHIN))));
+  return { hip: toTarget + hipOpen, knee: -(Math.PI - kneeIn) };
+}
 
 /** Robot rifle arm: how far it swings either side of the body (rad), its pitch range, and its speed (rad/s). */
 const ARM_YAW = THREE.MathUtils.degToRad(40);
@@ -117,6 +139,9 @@ export interface VehicleBody {
   saberTip?: THREE.Object3D;
   /** Robot: everything above the waist (torso, head, arms, backpack), pivoting at the hips so it can twist and lean. */
   upper?: THREE.Group;
+  /** Robot: shin pivots at the knees (bend about X) and feet at the ankles (kept level). */
+  shins?: THREE.Group[];
+  feet?: THREE.Group[];
 }
 
 function wheel(r: number, width: number) {
@@ -327,18 +352,24 @@ function buildRobot(): VehicleBody {
   const thrusterMat = cel('#6a6e78');
   thrusterMat.emissive = new THREE.Color('#8fe8ff');
   thrusterMat.emissiveIntensity = 0;
-  // legs: hip pivot at y 9
-  const legs: THREE.Group[] = [];
+  // legs: hip pivot at y 9, knee pivot 3.9 below it, ankle 3.9 below that (sole on the ground)
+  const legs: THREE.Group[] = [], shins: THREE.Group[] = [], feet: THREE.Group[] = [];
   for (const s of [-1, 1]) {
     const leg = new THREE.Group();
     leg.position.set(s * 2.2, 9, 0);
     leg.add(box(2.4, 3.6, 2.6, cream, 0, -3.6, 0)); // thigh
     leg.add(box(2.0, 0.6, 2.2, dark, 0, -4.2, 0)); // knee joint
-    leg.add(box(2.8, 3.6, 3.0, cream, 0, -7.8, 0.1)); // shin
-    leg.add(box(2.9, 1.0, 1.0, orange, 0, -5.4, -1.45)); // knee guard
-    leg.add(box(3.0, 1.2, 4.6, teal, 0, -9, -0.5)); // foot
+    const shin = new THREE.Group();
+    shin.position.y = -THIGH;
+    shin.add(box(2.8, 3.6, 3.0, cream, 0, -3.9, 0.1)); // shin
+    shin.add(box(2.9, 1.0, 1.0, orange, 0, -1.5, -1.45)); // knee guard
+    const foot = new THREE.Group();
+    foot.position.y = -SHIN;
+    foot.add(box(3.0, 1.2, 4.6, teal, 0, -1.2, -0.5)); // foot: stays level on the ground
+    shin.add(foot);
+    leg.add(shin);
     body.add(leg);
-    legs.push(leg);
+    legs.push(leg); shins.push(shin); feet.push(foot);
   }
   // pelvis (stays with the legs), torso, chest
   const lower = [box(5.2, 2.0, 3.2, dark, 0, 8.2, 0), box(1.6, 1.6, 0.6, orange, 0, 8.3, -1.8)]; // crotch plate
@@ -432,7 +463,7 @@ function buildRobot(): VehicleBody {
   for (const c of [...body.children]) if (c !== upper && !legs.includes(c as THREE.Group) && !lower.includes(c as THREE.Mesh)) upper.attach(c);
   upper.rotation.order = 'YXZ';
   addOutline(body);
-  return { root, body, wheels: [], legs, arms, flames, thrusterMat, muzzle, saberBack, saberHand, saberBlade: blade, saberBase, saberTip, upper };
+  return { root, body, wheels: [], legs, shins, feet, arms, flames, thrusterMat, muzzle, saberBack, saberHand, saberBlade: blade, saberBase, saberTip, upper };
 }
 
 const BUILDERS: Record<VehicleKind, () => VehicleBody> = {
@@ -477,7 +508,9 @@ export class Vehicle {
    * Robot close combat.  `state` runs stowed -> drawing -> ready <-> slash -> stowing -> stowed;
    * the game decides when, this class only animates.  `combo` picks the slash (0..3).
    */
-  readonly saber = { state: 'stowed' as 'stowed' | 'drawing' | 'ready' | 'slash' | 'stowing', t: 0, combo: 0, dur: 0.45, ignite: 0 };
+  readonly saber = { state: 'stowed' as 'stowed' | 'drawing' | 'ready' | 'slash' | 'stowing', t: 0, combo: 0, dur: 0.45, ignite: 0, step: 1 };
+  /** Metres of the current cut's step already applied to pos (root motion). */
+  private stepDone = 0;
   /** The saber pose last frame: every move blends from here. */
   private poseNow: Pose = REST_POSE;
 
@@ -498,6 +531,7 @@ export class Vehicle {
     const sb = this.saber;
     if (sb.state !== 'ready' && !(sb.state === 'slash' && sb.t > sb.dur * 0.62)) return false;
     sb.state = 'slash'; sb.t = 0; sb.combo = i; sb.dur = SLASHES[i].dur;
+    this.stepDone = 0;
     return true;
   }
   /** World positions of the blade's base and tip (for hits and the trail). */
@@ -561,16 +595,57 @@ export class Vehicle {
     ra.rotation.set(key.ra[0], key.ra[1], key.ra[2]);
     la.rotation.set(key.la[0], key.la[1], key.la[2]);
     p.upper?.rotation.set(key.up[0], key.up[1], key.up[2]);
-    // the stance: drop the hips, open the legs so the feet stay down (left foot leads for a right-handed cut)
-    const st = key.st * (1 - walk);
-    const drop = st * MAX_DROP;
-    const open = Math.acos(1 - drop / LEG);
-    p.legs![0].rotation.x = walkLegs[0] * walk + open * (1 - walk);
-    p.legs![1].rotation.x = walkLegs[1] * walk - open * 0.85 * (1 - walk);
-    p.legs![0].rotation.z = -0.08 * st;
-    p.legs![1].rotation.z = 0.08 * st;
+    // ---- footwork -------------------------------------------------------------------
+    // Feet are placed in the robot's local z (forward -).  During a cut the front
+    // foot lifts, swings forward and plants while the robot itself moves forward
+    // by the step length; the back foot stays planted in the world (so in local
+    // terms it falls behind) until the recovery, when it is drawn up.
+    // a deeper stance mostly reaches the front foot forward; the back foot stays near its spot
+    let front = GUARD_FRONT * (1 + key.st * 0.5), back = GUARD_BACK * (1 + key.st * 0.2), liftF = 0, liftB = 0;
+    if (sb.state === 'slash') {
+      const k = sb.t / sb.dur;
+      const L = STEP_IN[sb.combo] * sb.step;
+      // root motion: the body is carried forward about half as far as the front foot reaches,
+      // the rest is the lunge -- so the back foot can stay planted
+      const D = L * BODY_SHARE * ease((k - 0.28) / 0.27);
+      const dD = D - this.stepDone;
+      this.stepDone = D;
+      this.pos.x -= Math.sin(this.yaw) * dD;
+      this.pos.z -= Math.cos(this.yaw) * dD;
+      // front foot: in the air from 0.28 to 0.55, landing a little further ahead than it started
+      const u = Math.max(0, Math.min(1, (k - 0.28) / 0.27));
+      if (u > 0 && u < 1) liftF = Math.sin(Math.PI * u) * 2.2;
+      const landAt = Math.max(-FRONT_MAX, front - L * (1 - BODY_SHARE) - 0.8);
+      front = (front + D) * (1 - u) + landAt * u;
+      // back foot: planted -- it drifts back in local terms as the body moves -- then steps up in the recovery
+      const r = Math.max(0, Math.min(1, (k - 0.78) / 0.22));
+      // (a step longer than the leg can trail drags the back foot along rather than sinking the hips)
+      back = Math.min(BACK_MAX, back + D * (1 - ease(r)));
+      if (r > 0 && r < 1) liftB = Math.sin(Math.PI * r) * 1.6;
+    } else this.stepDone = 0;
+    // hips: as low as the stance asks, and low enough that both planted feet can reach the ground
+    const walkLegs0 = walkLegs;
+    let hipY = HIP - key.st * 1.6 + key.hop;
+    for (const [z, lift] of [[front, liftF], [back, liftB]] as const) {
+      if (lift > 0) continue;
+      const maxDrop = Math.sqrt(Math.max(0, (THIGH + SHIN - 0.05) ** 2 - z * z)) + ANKLE;
+      hipY = Math.min(hipY, maxDrop);
+    }
+    hipY = Math.max(HIP - MAX_LUNGE, hipY) * (1 - walk) + HIP * walk;
+    // solve each leg; the foot stays level
+    const legsTarget: [number, number][] = [[front, liftF], [back, liftB]];
+    for (let i = 0; i < 2; i++) {
+      const [z, lift] = legsTarget[i];
+      const ik = legIK(z, -(hipY - ANKLE - lift));
+      p.legs![i].rotation.x = walkLegs0[i] * walk + ik.hip * (1 - walk);
+      if (p.shins) p.shins[i].rotation.x = ik.knee * (1 - walk);
+      if (p.feet) p.feet[i].rotation.x = -(p.legs![i].rotation.x + (p.shins ? p.shins[i].rotation.x : 0));
+    }
+    p.legs![0].rotation.z = -0.06 * key.st;
+    p.legs![1].rotation.z = 0.06 * key.st;
+    const drop = HIP - hipY;
     this.poseNow = key;
-    return { drop, lunge: key.lunge * (1 - walk), hop: key.hop };
+    return { drop, lunge: 0, hop: 0 };
   }
 
 
@@ -660,6 +735,12 @@ export class Vehicle {
       const legA = air ? -(0.06 + 0.3 * fwd) : swing, legB = air ? -(0.14 + 0.4 * fwd) : -swing;
       p.legs[0].rotation.x += (legA - p.legs[0].rotation.x) * Math.min(1, dt * 6);
       p.legs[1].rotation.x += (legB - p.legs[1].rotation.x) * Math.min(1, dt * 6);
+      if (p.shins && p.feet) for (let i = 0; i < 2; i++) {
+        // a soft knee on the lifting leg while walking; straight in the air
+        const lift = air ? 0 : Math.max(0, i ? -Math.sin(this.stride) : Math.sin(this.stride)) * Math.min(0.6, Math.abs(this.speed) * 0.08);
+        p.shins[i].rotation.x = -lift;
+        p.feet[i].rotation.x = -(p.legs[i].rotation.x - lift);
+      }
       p.legs[0].rotation.z += ((air ? -0.05 : 0) - p.legs[0].rotation.z) * Math.min(1, dt * 6);
       p.legs[1].rotation.z += ((air ? 0.05 : 0) - p.legs[1].rotation.z) * Math.min(1, dt * 6);
       const armA = air ? -(0.15 + 0.35 * fwd) : -swing * 0.8;
@@ -700,6 +781,7 @@ export class Vehicle {
       }
       const bob = air ? 0 : Math.abs(Math.cos(this.stride)) * Math.min(0.5, Math.abs(this.speed) * 0.05);
       p.body.position.set(0, bob - saberBody.drop + saberBody.hop, -saberBody.lunge);
+      p.root.position.set(this.pos.x, this.pos.y, this.pos.z); // the saber step moved pos this frame
       p.body.rotation.x = air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0; // lean into flight
       if (p.flames && p.thrusterMat) {
         for (const f of p.flames) f.scale.set(0.6 + this.thrust * 0.5, 0.001 + this.thrust * (1 + Math.random() * 0.25), 0.6 + this.thrust * 0.5);

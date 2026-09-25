@@ -304,6 +304,8 @@ export class RobotGame {
     if (sb.state !== 'slash') this.sinceSlash += dt;
     if (this.wantSlash) {
       const next = this.sinceSlash < COMBO_WINDOW || sb.state === 'slash' ? (this.lastCombo + 1) % SLASHES.length : 0;
+      // step in fully from out at the edge of reach, barely when already on top of it
+      v.saber.step = Math.max(0.2, Math.min(1.3, (dist - 18) / 14));
       if (v.slash(next)) {
         this.wantSlash = false;
         this.lastCombo = next;
@@ -311,8 +313,6 @@ export class RobotGame {
         this.slashStruck = false;
         this.slashSwung = false;
         this.sinceSlash = 0;
-        // step in with the cut if the kaiju is a little far
-        if (dist > 24) { v.push.x += -Math.sin(want) * 14; v.push.z += -Math.cos(want) * 14; }
       } else if (sb.state !== 'drawing' && sb.state !== 'slash') this.wantSlash = false;
     }
     if (sb.state !== 'slash') return;
