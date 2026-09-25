@@ -82,7 +82,7 @@ export class SpeedFx {
    * half the screen height).
    */
   update(dt: number, want: number, center: THREE.Vector3, vr: boolean, size = 0.4) {
-    this.level += (want - this.level) * Math.min(1, dt * (want > this.level ? 5 : 2.5));
+    this.level += (want - this.level) * Math.min(1, dt * (want > this.level ? 2 : 3)); // eases in, never pops
     const on = this.level > 0.01;
     this.mesh.visible = on;
     if (!on) return;

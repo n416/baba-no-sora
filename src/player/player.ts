@@ -296,6 +296,8 @@ export class Player {
    * lands on roofs, and flattens a small building it walks into -- or any
    * building it rams at dash or flying speed.
    */
+  /** Robot: seconds a boost has been held (drains quickly when let go). */
+  private boostTime = 0;
   /** Robot: 0..1, how far into a powered dive (Ctrl / Q) it is. */
   private dive = 0;
 
@@ -313,9 +315,14 @@ export class Player {
     const v = this.vehicle!, R = v.spec.robot!;
     this.shakeT += dt;
     this.shake *= Math.exp(-dt * 9);
-    // boosting: dashing along the ground, climbing on the verniers or diving -- not the landing burn, which is braking
-    const dash = input.boost && Math.abs(v.speed) > R.walk + 1 ? Math.min(1, (Math.abs(v.speed) - R.walk) / (R.dash - R.walk)) : 0;
-    this.boostLevel = Math.max(dash, input.lift > 0 ? v.thrust : 0, v.airborne && input.boost ? 0.8 : 0, v.airborne ? this.dive : 0);
+    // boosting (dash, climbing on the verniers, flying fast, diving -- never the landing burn,
+    // which is braking): the effect builds up only once a boost has been held a moment,
+    // and only as the machine actually picks up speed
+    const boosting = (input.boost && input.throttle !== 0) || (v.airborne && input.lift !== 0);
+    this.boostTime = boosting ? this.boostTime + dt : Math.max(0, this.boostTime - dt * 3);
+    const held = Math.min(1, Math.max(0, (this.boostTime - 0.3) / 1.1));
+    const quick = Math.min(1, Math.max(0, (Math.hypot(v.speed, v.vy) - 8) / 12));
+    this.boostLevel = held * held * (3 - 2 * held) * quick;
     // turning: tank-style, and the camera turns with it (mouse look is on top)
     v.steerInput += (input.steer - v.steerInput) * Math.min(1, dt * 6);
     v.yaw -= v.steerInput * R.turn * dt;
