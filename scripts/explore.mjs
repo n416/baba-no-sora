@@ -37,6 +37,7 @@ try {
   await robotPage.goto(URL + (URL.includes('?') ? '&' : '?') + 'vehicle=robot', { waitUntil: 'load' });
   await robotPage.waitForFunction(() => !!window.__scene, null, { timeout: 60000 });
   result.robot = await robotPage.evaluate(() => window.__scene.robotRound());
+  result.melee = await robotPage.evaluate(() => window.__scene.robotMelee());
   const checks = [];
   if (result.ride) {
     checks.push(['ride reaches the end (>= 0.97)', result.ride.progress >= 0.97]);
@@ -53,6 +54,12 @@ try {
     checks.push(['robot: kaiju comes after 6 buildings', result.robot.downWhenSummoned >= 6 && result.robot.phaseAfterSummon === 'rising']);
     checks.push(['robot: kaiju defeated by beams', result.robot.hpAfter === 0 && result.robot.wins === 1]);
     checks.push(['robot: city and robot reset after the win', result.robot.phaseEnd === 'calm' && result.robot.standingAfterReset === result.robot.destructibles && result.robot.robotAtStart < 1]);
+  }
+  if (result.melee) {
+    checks.push(['melee: close to the kaiju, the saber comes out', result.melee.mode === 'melee' && result.melee.saberAfterDraw === 'ready']);
+    checks.push(['melee: the combo cycles through all four cuts', result.melee.combo.startsWith('0123') && result.melee.afterPause === 0]);
+    checks.push(['melee: cuts land and the kaiju reels', result.melee.slashHits >= 6 && result.melee.maxRecoil > 0.3]);
+    checks.push(['melee: backing off puts the saber away', result.melee.modeFar === 'shoot' && result.melee.saberFar !== 'ready']);
   }
   checks.push(['no console errors', errors.length === 0]);
   ok = checks.every(([, pass]) => pass);

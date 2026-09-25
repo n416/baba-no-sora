@@ -48,6 +48,7 @@ src/
   game/destruction.ts  建物の崩壊（bake 済みメッシュの頂点範囲を書き換える）、瓦礫と土煙（InstancedMesh 2 つ）、restoreAll()
   game/kaiju.ts        怪獣のモデル（架空。脚・尻尾・顎がピボット、頭上の VR 用ゲージ）
   audio/sfx.ts         効果音（Web Audio でその場で合成、ファイル無し）。unlock() までは無音。`__scene.sfx.selfTest()` で全音をオフライン描画して peak/RMS を確認、`sfx.counts` で呼ばれた回数
+  game/fx.ts           戦闘エフェクト（加算の光・衝撃波リング・火花・光弾・サーベルの軌跡）
   game/game.ts         ロボットモードの進行: ビーム → 6 棟で怪獣出現 → 撃破 → 街とロボットを元に戻す
 scripts/shoot.mjs      Critic 用撮影 (Playwright)
 scripts/explore.mjs    回帰テスト (Playwright)
@@ -68,6 +69,7 @@ docs/                  brief.md / survey.md / critic-iter-N.md をここに
   ```
 - 時間を進めるテストは手でステップ：`__scene.step(10)`（10 秒分）。
 - `__scene.autoRun(120, 'ride' | 'walk')` → `{ progress, stuckSeconds }`。
+- `__scene.robotMelee()` → 接近モード・連続技の順番・命中数・のけぞり・離れたらサーベル収納、を確認。
 - `__scene.robotRound()`（`?vehicle=robot` のページで）→ 6 棟壊して怪獣を呼び、倒し、復元されるまでを 1 ラウンド自動で回す。
 - `__scene.autoFly(150)` → 遊覧飛行で離陸〜周回 `{ takeoffAt, maxY, loopCoverage, airHits }`。`__scene.autoLand()` → 滑走路に降りられるか。
 - `__shot(name, w, h, {})`（vp も pos も無し）は今のプレイヤー視点。乗り物は `player.xrInput = {...}` で入力を与えて `step()` で動かす。

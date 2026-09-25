@@ -27,6 +27,8 @@ export class Sfx {
   /** The vernier jet: a brown-noise roar through a thrust-driven low-pass, a thin hiss, and a flutter. */
   private jet?: { body: GainNode; tone: BiquadFilterNode; hiss: GainNode; hissF: BiquadFilterNode };
   private lastThrust = 0;
+  /** The saber's hum while it is lit. */
+  private hum?: { g: GainNode; osc: OscillatorNode };
   private engine?: { g: GainNode; osc: OscillatorNode; buzz: OscillatorNode };
   private wind?: GainNode;
   private testing = false;
@@ -234,6 +236,78 @@ export class Sfx {
     this.tone(dst, 'sine', 320, 70, t, 0.01, 0.6, 0.4);
   }
 
+  /** The saber lighting: a snap and a rising electric buzz, `delay` s from now (when the blade appears). */
+  saberIgnite(at: THREE.Vector3 | undefined, delay = 0) {
+    this.count('saberIgnite');
+    const o = this.out(at, 0.6, 80);
+    if (!o) return;
+    const { t: t0, dst } = o;
+    const t = t0 + delay;
+    this.burst(dst, t, 0.08, 0.4, 'highpass', 4000, 2500);
+    this.tone(dst, 'sawtooth', 60, 150, t, 0.01, 0.4, 0.22);
+    this.tone(dst, 'square', 120, 300, t, 0.01, 0.35, 0.08);
+  }
+
+  /** The saber going out: the buzz collapses. */
+  saberOff(at: THREE.Vector3 | undefined) {
+    this.count('saberOff');
+    const o = this.out(at, 0.5, 80);
+    if (!o) return;
+    const { t, dst } = o;
+    this.tone(dst, 'sawtooth', 150, 45, t, 0.005, 0.3, 0.2);
+  }
+
+  /** A swing: air torn by the blade (a band of noise sweeping up) with the hum Doppler-bending. */
+  saberSwing(at: THREE.Vector3, heavy = false) {
+    this.count('saberSwing');
+    const o = this.out(at, heavy ? 0.8 : 0.6, 80);
+    if (!o) return;
+    const { t, dst } = o;
+    const len = heavy ? 0.45 : 0.3;
+    this.burst(dst, t, len, 0.5, 'bandpass', 350, heavy ? 2200 : 1800, len * 0.4);
+    this.tone(dst, 'sawtooth', heavy ? 170 : 200, heavy ? 95 : 120, t, len * 0.3, len, 0.14);
+  }
+
+  /** The blade biting: a hot sizzle, a thump, a crackle. */
+  saberHit(at: THREE.Vector3, heavy = false) {
+    this.count('saberHit');
+    const o = this.out(at, heavy ? 1 : 0.75, 120);
+    if (!o) return;
+    const { t, dst } = o;
+    this.burst(dst, t, heavy ? 0.7 : 0.4, 0.55, 'highpass', 5000, 1800);
+    this.tone(dst, 'sine', heavy ? 110 : 150, 40, t, 0.004, heavy ? 0.6 : 0.35, 0.8);
+    this.brownBurst(dst, t, heavy ? 0.8 : 0.4, 0.7, 260, 0.004);
+    for (let i = 0; i < (heavy ? 10 : 5); i++) this.grain(dst, t + Math.random() * 0.25, 0.02 + Math.random() * 0.03, 0.2, 2500 + Math.random() * 3000);
+  }
+
+  /** The kaiju in pain: a short, higher cry than the roar. */
+  yelp(at: THREE.Vector3, big = false) {
+    this.count('yelp');
+    const o = this.out(at, big ? 0.8 : 0.55, 220);
+    if (!o) return;
+    const { ctx, t, dst } = o;
+    const len = big ? 0.9 : 0.55;
+    const filt = ctx.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.Q.value = 3;
+    filt.frequency.setValueAtTime(1300, t);
+    filt.frequency.exponentialRampToValueAtTime(700, t + len);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.9, t + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    filt.connect(g).connect(dst);
+    for (const [f0, f1] of [[330, 160], [495, 230]] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(f0, t);
+      osc.frequency.exponentialRampToValueAtTime(f1, t + len);
+      osc.connect(filt);
+      osc.start(t);
+      osc.stop(t + len + 0.05);
+    }
+  }
+
   /** Round won, city restored: a bright four-note chime. */
   chime() {
     this.count('chime');
@@ -249,7 +323,7 @@ export class Sfx {
    * Per frame: verniers (0..1), the winged car's engine (speed m/s, null when not
    * riding it), wind (airspeed while flying).  Smoothed with setTargetAtTime.
    */
-  loops(thrust: number, engineSpeed: number | null, wind: number) {
+  loops(thrust: number, engineSpeed: number | null, wind: number, saber = 0) {
     const ctx = this.ctx;
     if (!ctx || !this.jet || !this.engine || !this.wind) return;
     const t = ctx.currentTime;
@@ -269,6 +343,10 @@ export class Sfx {
       this.engine.buzz.frequency.setTargetAtTime(22 + Math.abs(engineSpeed) * 2.1, t, 0.15);
     }
     this.wind.gain.setTargetAtTime(Math.min(0.28, wind * 0.011), t, 0.3);
+    if (this.hum) {
+      this.hum.g.gain.setTargetAtTime(saber * 0.09, t, 0.05);
+      this.hum.osc.frequency.setTargetAtTime(88 + Math.random() * 4, t, 0.05); // a slight waver
+    }
   }
 
   private startLoops() {
@@ -288,6 +366,22 @@ export class Sfx {
       return g;
     };
     this.jet = this.makeJet();
+    {
+      // saber hum: two detuned saws through a low-pass, off until a blade is lit
+      const hg = ctx.createGain();
+      hg.gain.value = 0;
+      const hf = ctx.createBiquadFilter();
+      hf.type = 'lowpass';
+      hf.frequency.value = 700;
+      const o1 = ctx.createOscillator(), o2 = ctx.createOscillator();
+      o1.type = o2.type = 'sawtooth';
+      o1.frequency.value = 90;
+      o2.frequency.value = 91.5;
+      o1.connect(hf); o2.connect(hf);
+      hf.connect(hg).connect(this.master);
+      o1.start(); o2.start();
+      this.hum = { g: hg, osc: o1 };
+    }
     this.wind = src('highpass', 600, 0.4);
     const g = ctx.createGain();
     g.gain.value = 0;
@@ -477,6 +571,8 @@ export class Sfx {
       ['hitKaiju', () => this.hitKaiju(here)], ['collapse', () => this.collapse(here, 30)], ['robotStep', () => this.robotStep(here)],
       ['kaijuStep', () => this.kaijuStep(here)], ['roar', () => this.roar(here)], ['charge', () => this.charge(here, 2.2)],
       ['plasma', () => this.plasma(here)], ['chime', () => this.chime()],
+      ['saberIgnite', () => this.saberIgnite(here)], ['saberSwing', () => this.saberSwing(here, true)],
+      ['saberHit', () => this.saberHit(here, true)], ['yelp', () => this.yelp(here, true)],
       ['jet', () => { this.jet = this.makeJet(); this.lastThrust = 0; this.engine = undefined; this.loopsAt(1, 0); this.loopsAt(0, 1.6); }],
     ];
     const out: Record<string, { peak: number; rms: number; lowShare: number }> = {};

@@ -47,6 +47,23 @@ export const VEHICLES: Record<VehicleKind, VehicleSpec> = {
   keiTruck: { name: '軽トラ', maxSpeed: 11, boost: 1.2, accel: 2.6, brake: 7, reverse: 2.5, turnRate: 0.9, eyeHeight: 1.45, seatBack: -0.9, wheelRadius: 0.3, radius: 1.2, lean: 0, chase: { dist: 7.5, height: 3.0 } },
 };
 
+// ---- beam saber keyframes: right arm (rx raise, ry swing, rz tilt), torso twist, forward lean --------------
+interface Pose { rx: number; ry: number; rz: number; tw: number; lean: number }
+const REST_POSE: Pose = { rx: 0, ry: 0, rz: 0, tw: 0, lean: 0 };
+const GUARD: Pose = { rx: 1.15, ry: 0.3, rz: -0.15, tw: -0.1, lean: 0 };
+const REACH: Pose = { rx: 3.45, ry: 0, rz: 0.3, tw: 0.15, lean: 0 };
+/** The combo: a diagonal cut, a backhand sweep, a rising cut, an overhead finisher. */
+export const SLASHES: { name: string; dur: number; wind: Pose; strike: Pose; follow: Pose }[] = [
+  { name: '袈裟斬り', dur: 0.45, wind: { rx: 3.0, ry: 0.5, rz: -0.5, tw: -0.35, lean: 0 }, strike: { rx: 1.0, ry: -0.4, rz: 0.35, tw: 0.25, lean: -0.05 }, follow: { rx: 0.45, ry: -0.8, rz: 0.45, tw: 0.35, lean: -0.05 } },
+  { name: '横薙ぎ', dur: 0.45, wind: { rx: 1.6, ry: -1.3, rz: 0, tw: 0.45, lean: 0 }, strike: { rx: 1.6, ry: 0.35, rz: 0, tw: -0.1, lean: -0.04 }, follow: { rx: 1.5, ry: 1.25, rz: 0, tw: -0.45, lean: 0 } },
+  { name: '斬り上げ', dur: 0.45, wind: { rx: 0.35, ry: -0.6, rz: 0.45, tw: 0.3, lean: -0.06 }, strike: { rx: 2.1, ry: 0.1, rz: -0.2, tw: -0.05, lean: 0.03 }, follow: { rx: 3.0, ry: 0.4, rz: -0.3, tw: -0.25, lean: 0.06 } },
+  { name: '唐竹割り', dur: 0.7, wind: { rx: 3.55, ry: 0, rz: 0, tw: 0, lean: 0.12 }, strike: { rx: 1.3, ry: 0, rz: 0, tw: 0, lean: -0.18 }, follow: { rx: 0.7, ry: 0, rz: 0, tw: 0, lean: -0.22 } },
+];
+const ease = (k: number) => { const x = Math.max(0, Math.min(1, k)); return x * x * (3 - 2 * x); };
+const blend = (a: Pose, b: Pose, k: number): Pose => ({
+  rx: a.rx + (b.rx - a.rx) * k, ry: a.ry + (b.ry - a.ry) * k, rz: a.rz + (b.rz - a.rz) * k, tw: a.tw + (b.tw - a.tw) * k, lean: a.lean + (b.lean - a.lean) * k,
+});
+
 /** Robot rifle arm: how far it swings either side of the body (rad), its pitch range, and its speed (rad/s). */
 const ARM_YAW = THREE.MathUtils.degToRad(40);
 const ARM_PITCH: [number, number] = [THREE.MathUtils.degToRad(-60), THREE.MathUtils.degToRad(55)];
@@ -69,6 +86,12 @@ export interface VehicleBody {
   flames?: THREE.Object3D[];
   thrusterMat?: THREE.MeshToonMaterial;
   muzzle?: THREE.Object3D;
+  /** Robot: the saber's hilt stowed on the backpack, and the drawn saber in the right hand (blade scales along its z). */
+  saberBack?: THREE.Object3D;
+  saberHand?: THREE.Object3D;
+  saberBlade?: THREE.Object3D;
+  saberBase?: THREE.Object3D;
+  saberTip?: THREE.Object3D;
 }
 
 function wheel(r: number, width: number) {
@@ -346,8 +369,38 @@ function buildRobot(): VehicleBody {
     body.add(arm);
     arms.push(arm);
   }
+  // beam saber: a hilt clipped to the backpack's right shoulder ...
+  const hiltGeo = new THREE.CylinderGeometry(0.34, 0.38, 2.4, 10);
+  const saberBack = new THREE.Group();
+  saberBack.position.set(1.6, 15.4, 3.3);
+  saberBack.rotation.set(-0.25, 0, -0.2);
+  saberBack.add(new THREE.Mesh(hiltGeo, steel), box(0.8, 0.4, 0.8, dark, 0, 1.2, 0));
+  body.add(saberBack);
+  // ... and the same hilt in the right hand, with a blade that ignites out of it along -z
+  const saberHand = new THREE.Group();
+  saberHand.position.set(0, -9.4, -0.2);
+  const hilt = new THREE.Mesh(hiltGeo, steel);
+  hilt.rotation.x = Math.PI / 2;
+  saberHand.add(hilt, box(0.9, 0.5, 0.5, dark, 0, -0.2, -1.1));
+  const blade = new THREE.Group();
+  blade.position.z = -1.3;
+  const bladeCore = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 1, 10, 1, true).translate(0, 0.5, 0).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: '#fff4fb', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+  const bladeHalo = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.9, 1, 12, 1, true).translate(0, 0.5, 0).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: '#ff4fb0', transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide }));
+  bladeCore.scale.z = 13;
+  bladeHalo.scale.z = 13.6;
+  for (const m of [bladeCore, bladeHalo]) m.userData.noOutline = true;
+  blade.add(bladeCore, bladeHalo);
+  const saberBase = new THREE.Object3D(), saberTip = new THREE.Object3D();
+  saberTip.position.z = -13;
+  blade.add(saberBase, saberTip);
+  blade.scale.z = 0.001;
+  saberHand.add(blade);
+  saberHand.visible = false;
+  arms[1].add(saberHand);
   addOutline(body);
-  return { root, body, wheels: [], legs, arms, flames, thrusterMat, muzzle };
+  return { root, body, wheels: [], legs, arms, flames, thrusterMat, muzzle, saberBack, saberHand, saberBlade: blade, saberBase, saberTip };
 }
 
 const BUILDERS: Record<VehicleKind, () => VehicleBody> = {
@@ -388,8 +441,97 @@ export class Vehicle {
   /** Current rifle-arm angles relative to the body (rad): swing left/right, up/down. */
   private armYaw = 0;
   private armPitch = 0;
+  /**
+   * Robot close combat.  `state` runs stowed -> drawing -> ready <-> slash -> stowing -> stowed;
+   * the game decides when, this class only animates.  `combo` picks the slash (0..3).
+   */
+  readonly saber = { state: 'stowed' as 'stowed' | 'drawing' | 'ready' | 'slash' | 'stowing', t: 0, combo: 0, dur: 0.45, ignite: 0 };
+  private armNow = { rx: 0, ry: 0, rz: 0, tw: 0, lean: 0 };
+
+  /** Saber back on the backpack, instantly (round reset). */
+  resetSaber() {
+    const p = this.parts;
+    this.saber.state = 'stowed'; this.saber.t = 0; this.saber.ignite = 0;
+    if (p.saberHand) p.saberHand.visible = false;
+    if (p.saberBack) p.saberBack.visible = true;
+    if (p.saberBlade) p.saberBlade.scale.z = 0.001;
+    if (p.body) p.body.rotation.y = 0;
+  }
+  drawSaber() { if (this.saber.state === 'stowed' || this.saber.state === 'stowing') { this.saber.state = 'drawing'; this.saber.t = 0; } }
+  stowSaber() { if (this.saber.state !== 'stowed' && this.saber.state !== 'stowing') { this.saber.state = 'stowing'; this.saber.t = 0; } }
+  /** Start slash `i` (0..3).  Returns false if the saber is not in hand. */
+  slash(i: number) {
+    const sb = this.saber;
+    if (sb.state !== 'ready' && !(sb.state === 'slash' && sb.t > sb.dur * 0.62)) return false;
+    sb.state = 'slash'; sb.t = 0; sb.combo = i; sb.dur = SLASHES[i].dur;
+    return true;
+  }
+  /** World positions of the blade's base and tip (for hits and the trail). */
+  bladeEnds(base: THREE.Vector3, tip: THREE.Vector3) {
+    const p = this.parts;
+    if (!p.saberBase || !p.saberTip) return false;
+    p.saberTip.updateWorldMatrix(true, false);
+    p.saberBase.getWorldPosition(base);
+    p.saberTip.getWorldPosition(tip);
+    return true;
+  }
+
   /** Knock-back velocity (robot), decays. */
   readonly push = new THREE.Vector3();
+
+  /**
+   * The right arm (and a twist of the torso) through the draw, the guard, the
+   * four slashes and the stow.  Keyframes are (rx, ry, rz, twist, lean); the
+   * blade grows out of the hilt as it ignites.
+   */
+  private poseSaber(dt: number) {
+    const p = this.parts, sb = this.saber;
+    sb.t += dt;
+    let key: Pose = GUARD;
+    let ignite = sb.ignite;
+    if (sb.state === 'drawing') {
+      // reach over the right shoulder, take the hilt, bring it round to guard, light it
+      const k = sb.t / 0.75;
+      if (k < 0.45) key = blend(this.armNowPose(), REACH, ease(k / 0.45));
+      else key = blend(REACH, GUARD, ease((k - 0.45) / 0.55));
+      if (k >= 0.45 && p.saberBack?.visible) { p.saberBack.visible = false; if (p.saberHand) p.saberHand.visible = true; }
+      ignite = Math.max(0, Math.min(1, (k - 0.6) / 0.25));
+      if (k >= 1) { sb.state = 'ready'; sb.t = 0; }
+    } else if (sb.state === 'ready') {
+      key = { ...GUARD, rx: GUARD.rx + Math.sin(sb.t * 2.2) * 0.04 };
+      ignite = 1;
+    } else if (sb.state === 'slash') {
+      const S = SLASHES[sb.combo];
+      const k = sb.t / S.dur;
+      if (k < 0.3) key = blend(GUARD, S.wind, ease(k / 0.3));
+      else if (k < 0.55) key = blend(S.wind, S.strike, (k - 0.3) / 0.25); // the swing itself: fast and linear
+      else if (k < 0.8) key = blend(S.strike, S.follow, ease((k - 0.55) / 0.25));
+      else key = blend(S.follow, GUARD, ease((k - 0.8) / 0.2));
+      ignite = 1;
+      if (k >= 1) { sb.state = 'ready'; sb.t = 0; }
+    } else if (sb.state === 'stowing') {
+      const k = sb.t / 0.6;
+      ignite = Math.max(0, 1 - k / 0.3);
+      if (k < 0.5) key = blend(GUARD, REACH, ease(k / 0.5));
+      else key = blend(REACH, REST_POSE, ease((k - 0.5) / 0.5));
+      if (k >= 0.5 && p.saberHand?.visible) { p.saberHand.visible = false; if (p.saberBack) p.saberBack.visible = true; }
+      if (k >= 1) { sb.state = 'stowed'; sb.t = 0; this.aim = 0; }
+    }
+    sb.ignite = ignite;
+    if (p.saberBlade) p.saberBlade.scale.z = Math.max(0.001, ignite * (0.96 + Math.random() * 0.08)); // a little shimmer
+    const a = p.arms![1];
+    a.rotation.order = 'YXZ';
+    a.rotation.set(key.rx, key.ry, key.rz);
+    p.body.rotation.y = key.tw;
+    // the free arm balances the swing
+    p.arms![0].rotation.x = 0.5 - key.tw * 0.6;
+    Object.assign(this.armNow, key);
+  }
+
+  private armNowPose(): Pose {
+    const a = this.parts.arms![1];
+    return { rx: a.rotation.x, ry: a.rotation.y, rz: a.rotation.z, tw: this.parts.body.rotation.y, lean: 0 };
+  }
 
   /** World direction the rifle points (robot only; falls back to the body's facing). */
   muzzleDir(out: THREE.Vector3) {
@@ -482,6 +624,7 @@ export class Vehicle {
       const armA = air ? -(0.15 + 0.35 * fwd) : -swing * 0.8;
       p.arms[0].rotation.x += (armA - p.arms[0].rotation.x) * Math.min(1, dt * 6);
       p.arms[0].rotation.z += ((air ? -0.18 : 0) - p.arms[0].rotation.z) * Math.min(1, dt * 6);
+      if (this.saber.state !== 'stowed') { this.poseSaber(dt); } else
       // the right arm (rifle) comes up and tracks the target, as far as a shoulder turns
       if (this.aimHold > 0) {
         this.aimHold -= dt;
@@ -501,12 +644,16 @@ export class Vehicle {
         this.armYaw *= 1 - Math.min(1, dt * 3);
         this.armPitch *= 1 - Math.min(1, dt * 3);
       }
-      const rest = air ? -(0.15 + 0.35 * fwd) : swing * 0.8;
-      p.arms[1].rotation.order = 'YXZ'; // yaw the raised arm about the shoulder, then pitch it
-      p.arms[1].rotation.x = rest * (1 - this.aim) + this.aim * (Math.PI / 2 + this.armPitch);
-      p.arms[1].rotation.y = this.aim * this.armYaw;
+      if (this.saber.state === 'stowed') {
+        const rest = air ? -(0.15 + 0.35 * fwd) : swing * 0.8;
+        p.arms[1].rotation.order = 'YXZ'; // yaw the raised arm about the shoulder, then pitch it
+        p.arms[1].rotation.x = rest * (1 - this.aim) + this.aim * (Math.PI / 2 + this.armPitch);
+        p.arms[1].rotation.y = this.aim * this.armYaw;
+        p.arms[1].rotation.z = 0;
+        p.body.rotation.y = 0;
+      }
       p.body.position.y = air ? 0 : Math.abs(Math.cos(this.stride)) * Math.min(0.5, Math.abs(this.speed) * 0.05);
-      p.body.rotation.x = air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0; // lean into flight
+      p.body.rotation.x = (air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0) + (this.saber.state !== 'stowed' ? this.armNow.lean : 0); // lean into flight / the swing
       if (p.flames && p.thrusterMat) {
         for (const f of p.flames) f.scale.set(0.6 + this.thrust * 0.5, 0.001 + this.thrust * (1 + Math.random() * 0.25), 0.6 + this.thrust * 0.5);
         p.thrusterMat.emissiveIntensity = this.thrust * 2;

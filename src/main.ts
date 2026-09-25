@@ -70,6 +70,8 @@ const game = player.vehicle?.spec.robot ? new RobotGame(world, player, hud) : nu
 if (game) player.onCrush = (id) => game.crush(id);
 player.onLand = (vy) => { const v = player.vehicle; if (v) sfx.robotStep(v.pos, Math.min(3, 1 + vy * 0.1)); };
 let firing = false;
+let pressed = false; // the button went down since the last frame (one saber cut per press)
+let xrFireWas = false;
 const xr = new XRSupport(renderer, rig, camera, player, tod);
 xr.onSession((on) => {
   if (on) sfx.unlock(); // entering VR is a user gesture
@@ -151,13 +153,16 @@ function step(dt: number) {
   player.update(dt);
   world.update(dt);
   if (game) {
-    if (firing || xrFire()) game.fire(camera);
+    const xf = xrFire();
+    game.trigger(camera, firing || xf, pressed || (xf && !xrFireWas));
+    pressed = false;
+    xrFireWas = xf;
     game.update(dt, camera);
   }
   // ears on the camera; the loops follow what is being ridden
   sfx.listen(camera);
   const rv = player.mode === 'ride' ? player.vehicle : null;
-  sfx.loops(rv?.spec.robot ? rv.thrust : 0, rv?.spec.flight ? rv.speed : null, rv?.airborne ? Math.abs(rv.speed) : 0);
+  sfx.loops(rv?.spec.robot ? rv.thrust : 0, rv?.spec.flight ? rv.speed : null, rv?.airborne ? Math.abs(rv.speed) : 0, rv?.spec.robot ? rv.saber.ignite : 0);
   if (!xr.presenting) player.applyCamera(rig, camera);
   xr.update(dt);
   applyLook();
@@ -197,7 +202,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 document.addEventListener('mousemove', (e) => { if (player.locked) player.look(e.movementX, e.movementY); });
 // robot: hold the left button to fire
-document.addEventListener('mousedown', (e) => { if (player.locked && e.button === 0 && game) firing = true; });
+document.addEventListener('mousedown', (e) => { if (player.locked && e.button === 0 && game) { firing = true; pressed = true; } });
 document.addEventListener('mouseup', (e) => { if (e.button === 0) firing = false; });
 function xrFire() { return xr.presenting && !!player.xrInput?.fire; }
 let hintOn = true;
@@ -264,7 +269,7 @@ function updateHint() {
   const kmh = v ? Math.round(Math.abs(v.speed) * 3.6) : 0;
   if (player.mode === 'walk' && v && cfg.mobility === 'both' && player.pos.distanceTo(v.pos) < 3.2) hud.hint(`F で${v.spec.name}に乗る`);
   else if (player.mode === 'ride' && v?.spec.robot) {
-    hud.hint(`${v.airborne ? `飛行中  高度 ${Math.round(v.pos.y)} m` : '歩行'} ／ W S 前後 / A D 旋回 / マウス 照準 / 左クリック ビーム（腕と体がターゲットへ向く。後ろは撃てない）\nShift ダッシュ / Space・E バーニア上昇 / Q 降下 / F 降りる`);
+    hud.hint(`${v.airborne ? `飛行中  高度 ${Math.round(v.pos.y)} m` : '歩行'} ／ W S 前後 / A D 旋回 / マウス 照準 / 左クリック ${game?.mode === 'melee' ? 'サーベルで斬る（連打で連続技）' : 'ビーム（腕と体がターゲットへ向く。後ろは撃てない）'}\nShift ダッシュ / Space・E バーニア上昇 / Q 降下 / F 降りる`);
   } else if (player.mode === 'ride' && v?.spec.flight) {
     const f = v.spec.flight;
     if (player.cruise) hud.hint(`遊覧飛行中  ${kmh} km/h  高度 ${Math.round(v.pos.y)} m  ／ C 手動に戻す`);
@@ -361,10 +366,8 @@ const api = {
     game.reset();
     const out: Record<string, unknown> = { destructibles: world.destructibles.length };
     // fly up a little to look down Waseda-dori, then aim at the nearest standing buildings
-    player.xrInput = { throttle: 0, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0, lift: 1 };
-    for (let i = 0; i < 90; i++) step(1 / 60);
-    player.xrInput = { throttle: 0, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0, lift: 0.35 };
-    out.hoverY = +v.pos.y.toFixed(1);
+    // fire standing in the street (from the verniers' ceiling the arm cannot pitch down onto the roofs)
+    player.xrInput = { throttle: 0, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0, lift: 0 };
     let shots = 0;
     for (let guard = 0; guard < 600 && game.phase === 'calm'; guard++) {
       const d = world.destructibles.filter((b) => b.state === 'standing').map((b) => ({ b, dist: b.box.getCenter(new THREE.Vector3()).distanceTo(v.pos) })).sort((a, b) => a.dist - b.dist)[0].b;
@@ -397,6 +400,46 @@ const api = {
   },
   game,
   sfx,
+  /**
+   * Robot close combat, scripted: bring the kaiju up 40 m ahead, wait for the
+   * switch to close-combat mode and the saber, then click in rhythm and record
+   * the combo order, hits, how far the kaiju reeled, and that the saber goes
+   * away again when the robot backs off.
+   */
+  robotMelee() {
+    if (!game) return null;
+    const v = player.vehicle!;
+    player.mode = 'ride';
+    game.reset();
+    step(0.1);
+    game.placeKaiju(v.pos.x - Math.sin(v.yaw) * 40, v.pos.z - Math.cos(v.yaw) * 40);
+    for (let i = 0; i < 60 * 4; i++) step(1 / 60);
+    const out: Record<string, unknown> = { phase: game.phase, mode: game.mode };
+    for (let i = 0; i < 60 * 1.2; i++) step(1 / 60);
+    out.saberAfterDraw = v.saber.state;
+    const hp0 = game.hp;
+    for (let n = 0; n < 12; n++) {
+      game.trigger(camera, false, true);
+      for (let i = 0; i < 18; i++) step(1 / 60); // ~0.3 s between clicks: inside the combo window
+    }
+    for (let i = 0; i < 60; i++) step(1 / 60);
+    out.combo = game.comboLog.join('');
+    out.slashHits = game.slashHits;
+    out.hpLost = hp0 - game.hp;
+    out.maxRecoil = +game.maxRecoil.toFixed(2);
+    // a pause longer than the window restarts the combo at the first cut
+    for (let i = 0; i < 60 * 1.5; i++) step(1 / 60);
+    const before = game.comboLog.length;
+    game.trigger(camera, false, true);
+    for (let i = 0; i < 30; i++) step(1 / 60);
+    out.afterPause = game.comboLog[before];
+    // back off: the saber goes back on the backpack, shooting mode again
+    v.pos.x += Math.sin(v.yaw) * 60; v.pos.z += Math.cos(v.yaw) * 60;
+    for (let i = 0; i < 60 * 1.5; i++) step(1 / 60);
+    out.modeFar = game.mode;
+    out.saberFar = v.saber.state;
+    return out;
+  },
   /** Fly the loop, then descend onto the runway by hand-coded inputs and check it lands. */
   autoLand() {
     const v = player.vehicle;
