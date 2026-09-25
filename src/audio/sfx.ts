@@ -18,11 +18,15 @@ export class Sfx {
   private ctx: AudioContext | null = null;
   private master!: GainNode;
   private noise!: AudioBuffer;
+  /** Brown noise (integrated white): energy in the low end -- rumble, roar, jets. */
+  private brown!: AudioBuffer;
   private muted = false;
   private readonly lpos = new THREE.Vector3();
   private readonly lright = new THREE.Vector3(1, 0, 0);
   // loops
-  private thrust?: { g: GainNode; rumble: GainNode };
+  /** The vernier jet: a brown-noise roar through a thrust-driven low-pass, a thin hiss, and a flutter. */
+  private jet?: { body: GainNode; tone: BiquadFilterNode; hiss: GainNode; hissF: BiquadFilterNode };
+  private lastThrust = 0;
   private engine?: { g: GainNode; osc: OscillatorNode; buzz: OscillatorNode };
   private wind?: GainNode;
   private testing = false;
@@ -52,6 +56,7 @@ export class Sfx {
     this.noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    this.brown = makeBrown(ctx);
     this.startLoops();
     void ctx.resume();
   }
@@ -104,19 +109,40 @@ export class Sfx {
     this.burst(dst, t, 0.25, 0.4, 'bandpass', 900, 500);
   }
 
-  /** A building coming down: a long low rumble with crackles of breaking concrete. */
+  /**
+   * A building coming down, layered from textures rather than tones:
+   *   - a deep brown-noise rumble that swells and wanders (several overlapping swells),
+   *   - a slam each time a floor pancakes onto the one below,
+   *   - gravel: dozens of tiny band-passed grains, dense at first, thinning out,
+   *   - a little glass breaking early on.
+   * No pitched glide: that is what made it sound like a synth.
+   */
   collapse(at: THREE.Vector3, height: number) {
     this.count('collapse');
-    const o = this.out(at, Math.min(1, 0.5 + height / 60), 140);
+    const o = this.out(at, Math.min(1, 0.55 + height / 60), 140);
     if (!o) return;
     const { t, dst } = o;
-    const len = 2.2 + height / 30;
-    this.burst(dst, t, len, 0.9, 'lowpass', 500, 90, 0.25);
-    this.tone(dst, 'sine', 55, 32, t, 0.3, len, 0.5);
-    for (let i = 0; i < 9; i++) {
-      const at2 = t + Math.random() * len * 0.7;
-      this.burst(dst, at2, 0.06 + Math.random() * 0.1, 0.35, 'bandpass', 1200 + Math.random() * 2500, 800);
+    const L = 2.4 + height / 25;
+    const rnd = Math.random;
+    // the rumble bed and its swells
+    this.brownBurst(dst, t, L, 0.8, 140, 0.18);
+    for (let i = 0; i < 4; i++) this.brownBurst(dst, t + rnd() * L * 0.55, 0.6 + rnd() * 0.9, 0.45 + rnd() * 0.25, 220 + rnd() * 200, 0.12);
+    // floors slamming down, one after another, getting closer together
+    const floors = Math.max(2, Math.min(7, Math.round(height / 4)));
+    for (let i = 0; i < floors; i++) {
+      const at2 = t + L * 0.6 * Math.pow((i + rnd() * 0.5) / floors, 0.8);
+      this.brownBurst(dst, at2, 0.35 + rnd() * 0.2, 0.75, 320, 0.004);
+      this.burst(dst, at2, 0.18, 0.25, 'lowpass', 1400, 300);
     }
+    // gravel and crumbling concrete
+    const grains = Math.min(90, 35 + Math.round(height * 1.5));
+    for (let i = 0; i < grains; i++) {
+      const at2 = t + L * 0.85 * Math.pow(rnd(), 1.6);
+      const f = 350 + rnd() * 2200;
+      this.grain(dst, at2, 0.015 + rnd() * 0.07, 0.08 + rnd() * 0.3, f);
+    }
+    // glass: a few bright ticks in the first moments
+    for (let i = 0; i < 7; i++) this.tone(dst, 'sine', 2600 + rnd() * 2600, 2400 + rnd() * 2000, t + rnd() * L * 0.3, 0.002, 0.05 + rnd() * 0.1, 0.03 + rnd() * 0.05);
   }
 
   /** A robot footfall: low thud plus a short metal clank. */
@@ -225,10 +251,17 @@ export class Sfx {
    */
   loops(thrust: number, engineSpeed: number | null, wind: number) {
     const ctx = this.ctx;
-    if (!ctx || !this.thrust || !this.engine || !this.wind) return;
+    if (!ctx || !this.jet || !this.engine || !this.wind) return;
     const t = ctx.currentTime;
-    this.thrust.g.gain.setTargetAtTime(thrust * 0.32, t, 0.08);
-    this.thrust.rumble.gain.setTargetAtTime(thrust * 0.4, t, 0.08);
+    const j = this.jet!;
+    const k = Math.max(0, Math.min(1, thrust));
+    j.body.gain.setTargetAtTime(0.75 * Math.pow(k, 0.8), t, 0.06);
+    j.tone.frequency.setTargetAtTime(220 + 1100 * k, t, 0.08); // opens up as the jets go to full
+    j.hiss.gain.setTargetAtTime(0.07 * k * k, t, 0.08);
+    j.hissF.frequency.setTargetAtTime(1500 + 1500 * k, t, 0.1);
+    // ignition: a "bwoom" when the jets light from idle
+    if (k > 0.35 && this.lastThrust <= 0.35) this.ignite();
+    this.lastThrust = k;
     if (engineSpeed === null) this.engine.g.gain.setTargetAtTime(0, t, 0.2);
     else {
       this.engine.g.gain.setTargetAtTime(0.05 + Math.min(0.12, Math.abs(engineSpeed) * 0.005), t, 0.2);
@@ -254,7 +287,7 @@ export class Sfx {
       n.start();
       return g;
     };
-    this.thrust = { g: src('bandpass', 1100, 0.6), rumble: src('lowpass', 180) };
+    this.jet = this.makeJet();
     this.wind = src('highpass', 600, 0.4);
     const g = ctx.createGain();
     g.gain.value = 0;
@@ -275,6 +308,66 @@ export class Sfx {
     osc.start();
     buzz.start();
     this.engine = { g, osc, buzz };
+  }
+
+  /**
+   * Brown noise (white noise integrated: energy in the low end) is what a jet
+   * roar is made of; white noise alone reads as static.  A 13 Hz wobble on the
+   * gain gives it the flutter of a real exhaust.
+   */
+  private makeJet() {
+    const ctx = this.ctx!;
+    const src = ctx.createBufferSource();
+    src.buffer = this.brown;
+    src.loop = true;
+    const tone = ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = 220;
+    tone.Q.value = 0.5;
+    const flutter = ctx.createGain();
+    flutter.gain.value = 1;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 13;
+    const lfoDepth = ctx.createGain();
+    lfoDepth.gain.value = 0.12;
+    lfo.connect(lfoDepth).connect(flutter.gain);
+    const body = ctx.createGain();
+    body.gain.value = 0;
+    src.connect(tone).connect(flutter).connect(body).connect(this.master);
+    // a thin hiss riding on top
+    const hs = ctx.createBufferSource();
+    hs.buffer = this.noise;
+    hs.loop = true;
+    const hissF = ctx.createBiquadFilter();
+    hissF.type = 'bandpass';
+    hissF.frequency.value = 1800;
+    hissF.Q.value = 0.7;
+    const hiss = ctx.createGain();
+    hiss.gain.value = 0;
+    hs.connect(hissF).connect(hiss).connect(this.master);
+    src.start();
+    hs.start();
+    lfo.start();
+    return { body, tone, hiss, hissF };
+  }
+
+  /** Test helper: schedule the jet at a given thrust at time `at` (offline rendering has no frames). */
+  private loopsAt(k: number, at: number) {
+    const j = this.jet!;
+    j.body.gain.setTargetAtTime(0.75 * Math.pow(k, 0.8), at, 0.06);
+    j.tone.frequency.setTargetAtTime(220 + 1100 * k, at, 0.08);
+    j.hiss.gain.setTargetAtTime(0.07 * k * k, at, 0.08);
+    if (k > 0.35) this.ignite();
+  }
+
+  /** The jets lighting: a low thump and a rising whoosh. */
+  private ignite() {
+    this.count('ignite');
+    const o = this.out(undefined, 0.5, 1);
+    if (!o) return;
+    const { t, dst } = o;
+    this.tone(dst, 'sine', 90, 45, t, 0.01, 0.35, 0.6);
+    this.burst(dst, t, 0.45, 0.35, 'bandpass', 250, 1400, 0.05);
   }
 
   // ---- building blocks -----------------------------------------------------------------
@@ -317,6 +410,42 @@ export class Sfx {
     osc.stop(t + len + 0.05);
   }
 
+  /** Brown noise through a low-pass at `cutoff`, with an attack/decay envelope. */
+  private brownBurst(dst: AudioNode, t: number, len: number, vol: number, cutoff: number, attack: number) {
+    const ctx = this.ctx!;
+    const n = ctx.createBufferSource();
+    n.buffer = this.brown;
+    n.playbackRate.value = 0.85 + Math.random() * 0.3;
+    const filt = ctx.createBiquadFilter();
+    filt.type = 'lowpass';
+    filt.frequency.value = cutoff;
+    filt.Q.value = 0.4;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    n.connect(filt).connect(g).connect(dst);
+    n.start(t, Math.random() * 3);
+    n.stop(t + len + 0.05);
+  }
+
+  /** One grain of crumbling: a click of band-passed noise, a few tens of milliseconds. */
+  private grain(dst: AudioNode, t: number, len: number, vol: number, f: number) {
+    const ctx = this.ctx!;
+    const n = ctx.createBufferSource();
+    n.buffer = this.noise;
+    const filt = ctx.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.value = f;
+    filt.Q.value = 1.4;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    n.connect(filt).connect(g).connect(dst);
+    n.start(t, Math.random() * 1.8);
+    n.stop(t + len + 0.02);
+  }
+
   /** Filtered noise with an attack/decay envelope; the filter sweeps f0 -> f1. */
   private burst(dst: AudioNode, t: number, len: number, vol: number, type: BiquadFilterType, f0: number, f1: number, attack = 0.004) {
     const ctx = this.ctx!;
@@ -341,15 +470,16 @@ export class Sfx {
    * synthesis produces sound without anyone having to listen.
    */
   async selfTest() {
-    const saved = { ctx: this.ctx, master: this.master, noise: this.noise, muted: this.muted };
+    const saved = { ctx: this.ctx, master: this.master, noise: this.noise, brown: this.brown, muted: this.muted, jet: this.jet, engine: this.engine, lastThrust: this.lastThrust };
     const here = new THREE.Vector3(this.lpos.x + 20, this.lpos.y, this.lpos.z);
     const cases: [string, () => void][] = [
       ['beam', () => this.beam(here)], ['impact', () => this.impact(here)], ['impactBig', () => this.impact(here, true)],
       ['hitKaiju', () => this.hitKaiju(here)], ['collapse', () => this.collapse(here, 30)], ['robotStep', () => this.robotStep(here)],
       ['kaijuStep', () => this.kaijuStep(here)], ['roar', () => this.roar(here)], ['charge', () => this.charge(here, 2.2)],
       ['plasma', () => this.plasma(here)], ['chime', () => this.chime()],
+      ['jet', () => { this.jet = this.makeJet(); this.lastThrust = 0; this.engine = undefined; this.loopsAt(1, 0); this.loopsAt(0, 1.6); }],
     ];
-    const out: Record<string, { peak: number; rms: number }> = {};
+    const out: Record<string, { peak: number; rms: number; lowShare: number }> = {};
     this.testing = true;
     this.muted = false;
     try {
@@ -361,11 +491,17 @@ export class Sfx {
         this.noise = off.createBuffer(1, off.sampleRate * 2, off.sampleRate);
         const d = this.noise.getChannelData(0);
         for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        this.brown = makeBrown(off as unknown as AudioContext);
         fn();
         const buf = await off.startRendering();
-        let peak = 0, sum = 0;
-        for (let ch = 0; ch < 2; ch++) for (const v of buf.getChannelData(ch)) { peak = Math.max(peak, Math.abs(v)); sum += v * v; }
-        out[name] = { peak: +peak.toFixed(3), rms: +Math.sqrt(sum / (buf.length * 2)).toFixed(4) };
+        let peak = 0, sum = 0, low = 0, lp = 0;
+        const a = 1 - Math.exp((-2 * Math.PI * 400) / buf.sampleRate); // one-pole low-pass at 400 Hz
+        for (let ch = 0; ch < 2; ch++) for (const v of buf.getChannelData(ch)) {
+          peak = Math.max(peak, Math.abs(v)); sum += v * v;
+          lp += a * (v - lp); low += lp * lp;
+        }
+        // lowShare: fraction of the energy below ~400 Hz (a roar is high, static is low)
+        out[name] = { peak: +peak.toFixed(3), rms: +Math.sqrt(sum / (buf.length * 2)).toFixed(4), lowShare: +(low / Math.max(1e-12, sum)).toFixed(2) };
       }
     } finally {
       this.testing = false;
@@ -376,6 +512,23 @@ export class Sfx {
 }
 
 const _q = new THREE.Quaternion(), _d = new THREE.Vector3();
+
+/** 4 s of brown noise whose loop point is cross-faded, so it can loop without a click. */
+function makeBrown(ctx: BaseAudioContext) {
+  const len = ctx.sampleRate * 4, fade = Math.floor(ctx.sampleRate * 0.25);
+  const buf = ctx.createBuffer(1, len + fade, ctx.sampleRate);
+  const b = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len + fade; i++) {
+    last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+    b[i] = last * 3.5;
+  }
+  // the tail blends into the head, then is dropped: sample len-1 flows into sample 0
+  for (let i = 0; i < fade; i++) { const w = i / fade; b[i] = b[i] * w + b[len + i] * (1 - w); }
+  const out = ctx.createBuffer(1, len, ctx.sampleRate);
+  out.getChannelData(0).set(b.subarray(0, len));
+  return out;
+}
 
 /** The one instance everything plays through. */
 export const sfx = new Sfx();

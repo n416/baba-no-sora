@@ -470,11 +470,18 @@ export class Vehicle {
       // walk cycle from ground speed; legs trail and arms spread a little in the air
       this.stride += Math.abs(this.speed) * dt * 0.32;
       const air = this.airborne ? 1 : 0;
-      const swing = air ? 0.25 : Math.sin(this.stride) * Math.min(0.55, Math.abs(this.speed) * 0.07);
-      p.legs[0].rotation.x = swing + air * 0.2;
-      p.legs[1].rotation.x = -swing + air * 0.35;
-      p.arms[0].rotation.x = -swing * 0.8 - air * 0.3;
-      p.arms[0].rotation.z = -air * 0.25;
+      const swing = air ? 0 : Math.sin(this.stride) * Math.min(0.55, Math.abs(this.speed) * 0.07);
+      // in the air: legs straight, trailing back as it gathers speed (never tucked forward -- that reads as a crouch),
+      // one a little behind the other, feet slightly apart; the free arm eases back
+      const fwd = Math.min(1, Math.abs(this.speed) / (s.robot.air || 1));
+      const legA = air ? -(0.06 + 0.3 * fwd) : swing, legB = air ? -(0.14 + 0.4 * fwd) : -swing;
+      p.legs[0].rotation.x += (legA - p.legs[0].rotation.x) * Math.min(1, dt * 6);
+      p.legs[1].rotation.x += (legB - p.legs[1].rotation.x) * Math.min(1, dt * 6);
+      p.legs[0].rotation.z += ((air ? -0.05 : 0) - p.legs[0].rotation.z) * Math.min(1, dt * 6);
+      p.legs[1].rotation.z += ((air ? 0.05 : 0) - p.legs[1].rotation.z) * Math.min(1, dt * 6);
+      const armA = air ? -(0.15 + 0.35 * fwd) : -swing * 0.8;
+      p.arms[0].rotation.x += (armA - p.arms[0].rotation.x) * Math.min(1, dt * 6);
+      p.arms[0].rotation.z += ((air ? -0.18 : 0) - p.arms[0].rotation.z) * Math.min(1, dt * 6);
       // the right arm (rifle) comes up and tracks the target, as far as a shoulder turns
       if (this.aimHold > 0) {
         this.aimHold -= dt;
@@ -494,7 +501,7 @@ export class Vehicle {
         this.armYaw *= 1 - Math.min(1, dt * 3);
         this.armPitch *= 1 - Math.min(1, dt * 3);
       }
-      const rest = swing * 0.8 - air * 0.3;
+      const rest = air ? -(0.15 + 0.35 * fwd) : swing * 0.8;
       p.arms[1].rotation.order = 'YXZ'; // yaw the raised arm about the shoulder, then pitch it
       p.arms[1].rotation.x = rest * (1 - this.aim) + this.aim * (Math.PI / 2 + this.armPitch);
       p.arms[1].rotation.y = this.aim * this.armYaw;
