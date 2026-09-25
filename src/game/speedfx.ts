@@ -86,8 +86,17 @@ export class SpeedFx {
     this.lines.visible = this.rim.visible = false;
   }
 
-  /** `want` 0..1: how hard the machine is boosting.  `speed` (m/s) sets how fast the lines stream. */
-  update(dt: number, want: number, speed: number, vr: boolean) {
+  /**
+   * `want` 0..1: how hard the machine is boosting.  `vel`: its velocity in the
+   * camera's frame (m/s) -- the lines stream out of the point it is heading for
+   * (ahead, off to the side, above...), not always out of the middle of the view.
+   */
+  update(dt: number, want: number, vel: THREE.Vector3, vr: boolean) {
+    const speed = vel.length();
+    if (speed > 1.5) {
+      _q.setFromUnitVectors(_fwd, _d.copy(vel).divideScalar(speed));
+      this.lines.quaternion.slerp(_q, Math.min(1, dt * 8));
+    }
     this.level += (want - this.level) * Math.min(1, dt * (want > this.level ? 5 : 2.5));
     const on = this.level > 0.01;
     this.lines.visible = on;
@@ -105,7 +114,8 @@ export class SpeedFx {
       const ang = Math.atan2(s.r, -s.z);
       const vis = Math.min(1, Math.max(0, (ang - MIN_ANGLE) / 0.15)) * Math.min(1, (s.z + Z_FAR) / 6);
       this.alpha.setX(i, vis);
-      // length along the view axis, width across the radial direction
+      // (in the lines' own frame, whose -z is the direction of travel)
+      // length along the travel axis, width across the radial direction
       this.p.set(Math.cos(s.a) * s.r, Math.sin(s.a) * s.r, s.z - len / 2);
       this.q.copy(_lay).premultiply(_spin.setFromAxisAngle(_z, s.a + Math.PI / 2));
       this.s.set(0.07, len, 1);
@@ -117,6 +127,7 @@ export class SpeedFx {
   }
 }
 const _z = new THREE.Vector3(0, 0, 1);
+const _fwd = new THREE.Vector3(0, 0, -1), _d = new THREE.Vector3(), _q = new THREE.Quaternion();
 /** The quad's length (y) laid along -z; then spun so its width runs round the view axis. */
 const _lay = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 const _spin = new THREE.Quaternion();

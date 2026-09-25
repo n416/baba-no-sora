@@ -69,6 +69,7 @@ const hud = new Hud(tod, cfg);
 // robot mode (?vehicle=robot): beams, verniers, a kaiju
 const game = player.vehicle?.spec.robot ? new RobotGame(world, player, hud) : null;
 const speedFx = new SpeedFx(camera);
+const _vel = new THREE.Vector3(), _velS = new THREE.Vector3(), _velCam = new THREE.Vector3(), _lastPos = new THREE.Vector3(), _camQ = new THREE.Quaternion();
 if (game) player.onCrush = (id) => game.crush(id);
 player.onLand = (vy) => { const v = player.vehicle; if (v) sfx.robotStep(v.pos, Math.min(3, 1 + vy * 0.1)); };
 let firing = false;
@@ -169,7 +170,15 @@ function step(dt: number) {
   sfx.loops(rv?.spec.robot ? rv.thrust : 0, rv?.spec.flight ? rv.speed : null, rv?.airborne ? Math.abs(rv.speed) : 0, rv?.spec.robot ? rv.saber.ignite : 0);
   if (!xr.presenting) player.applyCamera(rig, camera);
   const bv = player.mode === 'ride' ? player.vehicle : null;
-  speedFx.update(dt, bv?.spec.robot ? player.boostLevel : 0, bv ? Math.abs(bv.speed) : 0, xr.presenting);
+  // the machine's actual velocity (sideways, climbing, knocked back...), in the camera's frame
+  if (bv && dt > 0) {
+    _vel.subVectors(bv.pos, _lastPos).divideScalar(dt);
+    if (_vel.lengthSq() > 60 * 60) _vel.set(0, 0, 0); // a teleport (reset), not motion
+    _velS.lerp(_vel, Math.min(1, dt * 10));
+    _lastPos.copy(bv.pos);
+  }
+  camera.getWorldQuaternion(_camQ);
+  speedFx.update(dt, bv?.spec.robot ? player.boostLevel : 0, _velCam.copy(_velS).applyQuaternion(_camQ.invert()), xr.presenting);
   xr.update(dt);
   applyLook();
   camera.getWorldPosition(_camWorld);
