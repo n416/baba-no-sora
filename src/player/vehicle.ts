@@ -47,22 +47,45 @@ export const VEHICLES: Record<VehicleKind, VehicleSpec> = {
   keiTruck: { name: '軽トラ', maxSpeed: 11, boost: 1.2, accel: 2.6, brake: 7, reverse: 2.5, turnRate: 0.9, eyeHeight: 1.45, seatBack: -0.9, wheelRadius: 0.3, radius: 1.2, lean: 0, chase: { dist: 7.5, height: 3.0 } },
 };
 
-// ---- beam saber keyframes: right arm (rx raise, ry swing, rz tilt), torso twist, forward lean --------------
-interface Pose { rx: number; ry: number; rz: number; tw: number; lean: number }
-const REST_POSE: Pose = { rx: 0, ry: 0, rz: 0, tw: 0, lean: 0 };
-const GUARD: Pose = { rx: 1.15, ry: 0.3, rz: -0.15, tw: -0.1, lean: 0 };
-const REACH: Pose = { rx: 3.45, ry: 0, rz: 0.3, tw: 0.15, lean: 0 };
-/** The combo: a diagonal cut, a backhand sweep, a rising cut, an overhead finisher. */
+// ---- beam saber keyframes: the whole body ----------------------------------------------------------
+// ra / la: right / left arm (rx raise, ry swing to the robot's left, rz tilt), order YXZ
+// up: the upper body at the waist (x lean back +, y twist to the left +, z tilt)
+// st: stance 0..1 (hips drop, legs open front/back with the feet kept on the ground)
+// lunge: metres the body shifts forward over the front foot; hop: metres it rises
+type V3 = [number, number, number];
+interface Pose { ra: V3; la: V3; up: V3; st: number; lunge: number; hop: number }
+const P = (ra: V3, la: V3, up: V3, st: number, lunge = 0, hop = 0): Pose => ({ ra, la, up, st, lunge, hop });
+const REST_POSE = P([0, 0, 0], [0, 0, 0], [0, 0, 0], 0);
+const GUARD = P([1.15, 0.3, -0.15], [1.0, -0.45, 0.2], [-0.05, -0.2, 0], 0.35);
+const REACH = P([3.45, 0, 0.3], [0.35, 0, 0.15], [0.05, 0.25, -0.05], 0.15);
+/** The combo: a diagonal cut, a backhand sweep, a rising cut, a two-handed overhead finisher. */
 export const SLASHES: { name: string; dur: number; wind: Pose; strike: Pose; follow: Pose }[] = [
-  { name: '袈裟斬り', dur: 0.45, wind: { rx: 3.0, ry: 0.5, rz: -0.5, tw: -0.35, lean: 0 }, strike: { rx: 1.0, ry: -0.4, rz: 0.35, tw: 0.25, lean: -0.05 }, follow: { rx: 0.45, ry: -0.8, rz: 0.45, tw: 0.35, lean: -0.05 } },
-  { name: '横薙ぎ', dur: 0.45, wind: { rx: 1.6, ry: -1.3, rz: 0, tw: 0.45, lean: 0 }, strike: { rx: 1.6, ry: 0.35, rz: 0, tw: -0.1, lean: -0.04 }, follow: { rx: 1.5, ry: 1.25, rz: 0, tw: -0.45, lean: 0 } },
-  { name: '斬り上げ', dur: 0.45, wind: { rx: 0.35, ry: -0.6, rz: 0.45, tw: 0.3, lean: -0.06 }, strike: { rx: 2.1, ry: 0.1, rz: -0.2, tw: -0.05, lean: 0.03 }, follow: { rx: 3.0, ry: 0.4, rz: -0.3, tw: -0.25, lean: 0.06 } },
-  { name: '唐竹割り', dur: 0.7, wind: { rx: 3.55, ry: 0, rz: 0, tw: 0, lean: 0.12 }, strike: { rx: 1.3, ry: 0, rz: 0, tw: 0, lean: -0.18 }, follow: { rx: 0.7, ry: 0, rz: 0, tw: 0, lean: -0.22 } },
+  { name: '袈裟斬り', dur: 0.5,
+    wind: P([3.0, 0.5, -0.5], [2.2, -0.2, 0.3], [0.12, -0.6, -0.12], 0.45),
+    strike: P([1.0, -0.4, 0.35], [0.7, -0.5, 0.1], [-0.22, 0.45, 0.14], 0.8, 3),
+    follow: P([0.45, -0.8, 0.45], [0.35, -0.3, 0.2], [-0.28, 0.6, 0.16], 0.85, 3.5) },
+  { name: '横薙ぎ', dur: 0.5,
+    wind: P([1.6, -1.3, 0], [0.9, 0.7, -0.1], [0, 0.65, 0.05], 0.55),
+    strike: P([1.6, 0.35, 0], [0.5, -0.6, 0.4], [-0.1, -0.2, 0], 0.75, 2),
+    follow: P([1.5, 1.25, 0], [0.25, -0.9, 0.6], [-0.12, -0.7, -0.05], 0.7, 2.5) },
+  { name: '斬り上げ', dur: 0.5,
+    wind: P([0.35, -0.6, 0.45], [0.4, 0.3, 0.2], [-0.3, 0.3, 0.08], 1.0),
+    strike: P([2.1, 0.1, -0.2], [1.1, 0, 0.3], [0.05, -0.1, -0.05], 0.45, 2),
+    follow: P([3.0, 0.4, -0.3], [1.9, 0, 0.5], [0.22, -0.3, -0.1], 0.1, 2, 1.5) },
+  { name: '唐竹割り', dur: 0.75,
+    wind: P([3.55, 0.1, 0], [3.45, -0.25, -0.2], [0.28, 0, 0], 0.3, 0, 0.8),
+    strike: P([1.3, 0.1, 0], [1.25, -0.35, -0.15], [-0.4, 0, 0], 1.0, 5),
+    follow: P([0.75, 0.1, 0], [0.7, -0.35, -0.1], [-0.45, 0, 0], 1.0, 5.5) },
 ];
+const lerpV = (a: V3, b: V3, k: number): V3 => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 const ease = (k: number) => { const x = Math.max(0, Math.min(1, k)); return x * x * (3 - 2 * x); };
 const blend = (a: Pose, b: Pose, k: number): Pose => ({
-  rx: a.rx + (b.rx - a.rx) * k, ry: a.ry + (b.ry - a.ry) * k, rz: a.rz + (b.rz - a.rz) * k, tw: a.tw + (b.tw - a.tw) * k, lean: a.lean + (b.lean - a.lean) * k,
+  ra: lerpV(a.ra, b.ra, k), la: lerpV(a.la, b.la, k), up: lerpV(a.up, b.up, k),
+  st: a.st + (b.st - a.st) * k, lunge: a.lunge + (b.lunge - a.lunge) * k, hop: a.hop + (b.hop - a.hop) * k,
 });
+/** Leg length (hip to sole) of the robot: a stance of hip drop h opens the legs to acos(1 - h/L). */
+const LEG = 9;
+const MAX_DROP = 2.6;
 
 /** Robot rifle arm: how far it swings either side of the body (rad), its pitch range, and its speed (rad/s). */
 const ARM_YAW = THREE.MathUtils.degToRad(40);
@@ -92,6 +115,8 @@ export interface VehicleBody {
   saberBlade?: THREE.Object3D;
   saberBase?: THREE.Object3D;
   saberTip?: THREE.Object3D;
+  /** Robot: everything above the waist (torso, head, arms, backpack), pivoting at the hips so it can twist and lean. */
+  upper?: THREE.Group;
 }
 
 function wheel(r: number, width: number) {
@@ -315,9 +340,9 @@ function buildRobot(): VehicleBody {
     body.add(leg);
     legs.push(leg);
   }
-  // pelvis, torso, chest
-  body.add(box(5.2, 2.0, 3.2, dark, 0, 8.2, 0));
-  body.add(box(1.6, 1.6, 0.6, orange, 0, 8.3, -1.8)); // crotch plate
+  // pelvis (stays with the legs), torso, chest
+  const lower = [box(5.2, 2.0, 3.2, dark, 0, 8.2, 0), box(1.6, 1.6, 0.6, orange, 0, 8.3, -1.8)]; // crotch plate
+  body.add(...lower);
   body.add(box(7.2, 5.2, 4.6, cream, 0, 10.2, 0));
   body.add(box(6.0, 2.4, 0.6, teal, 0, 12.2, -2.4)); // chest plate
   for (const s of [-1, 1]) body.add(box(1.4, 0.9, 0.4, M('#f2d24a'), s * 1.9, 12.9, -2.8)); // chest vents
@@ -399,8 +424,15 @@ function buildRobot(): VehicleBody {
   saberHand.add(blade);
   saberHand.visible = false;
   arms[1].add(saberHand);
+  // the waist: move everything that is not legs or pelvis under a pivot at hip height
+  const upper = new THREE.Group();
+  upper.position.y = 9.6;
+  body.add(upper);
+  body.updateMatrixWorld(true);
+  for (const c of [...body.children]) if (c !== upper && !legs.includes(c as THREE.Group) && !lower.includes(c as THREE.Mesh)) upper.attach(c);
+  upper.rotation.order = 'YXZ';
   addOutline(body);
-  return { root, body, wheels: [], legs, arms, flames, thrusterMat, muzzle, saberBack, saberHand, saberBlade: blade, saberBase, saberTip };
+  return { root, body, wheels: [], legs, arms, flames, thrusterMat, muzzle, saberBack, saberHand, saberBlade: blade, saberBase, saberTip, upper };
 }
 
 const BUILDERS: Record<VehicleKind, () => VehicleBody> = {
@@ -446,7 +478,8 @@ export class Vehicle {
    * the game decides when, this class only animates.  `combo` picks the slash (0..3).
    */
   readonly saber = { state: 'stowed' as 'stowed' | 'drawing' | 'ready' | 'slash' | 'stowing', t: 0, combo: 0, dur: 0.45, ignite: 0 };
-  private armNow = { rx: 0, ry: 0, rz: 0, tw: 0, lean: 0 };
+  /** The saber pose last frame: every move blends from here. */
+  private poseNow: Pose = REST_POSE;
 
   /** Saber back on the backpack, instantly (round reset). */
   resetSaber() {
@@ -455,7 +488,8 @@ export class Vehicle {
     if (p.saberHand) p.saberHand.visible = false;
     if (p.saberBack) p.saberBack.visible = true;
     if (p.saberBlade) p.saberBlade.scale.z = 0.001;
-    if (p.body) p.body.rotation.y = 0;
+    if (p.upper) p.upper.rotation.set(0, 0, 0);
+    this.poseNow = REST_POSE;
   }
   drawSaber() { if (this.saber.state === 'stowed' || this.saber.state === 'stowing') { this.saber.state = 'drawing'; this.saber.t = 0; } }
   stowSaber() { if (this.saber.state !== 'stowed' && this.saber.state !== 'stowing') { this.saber.state = 'stowing'; this.saber.t = 0; } }
@@ -480,11 +514,13 @@ export class Vehicle {
   readonly push = new THREE.Vector3();
 
   /**
-   * The right arm (and a twist of the torso) through the draw, the guard, the
-   * four slashes and the stow.  Keyframes are (rx, ry, rz, twist, lean); the
-   * blade grows out of the hilt as it ignites.
+   * The whole body through the draw, the guard, the four cuts and the stow:
+   * both arms, the upper body twisting and leaning at the waist, the hips
+   * dropping into a stance with the legs opening front and back, and the body
+   * shifting forward onto the front foot at the strike.  `walk` is how much the
+   * walk cycle should still show through (moving or in the air: the stance gives way).
    */
-  private poseSaber(dt: number) {
+  private poseSaber(dt: number, walk: number, walkLegs: [number, number]) {
     const p = this.parts, sb = this.saber;
     sb.t += dt;
     let key: Pose = GUARD;
@@ -492,18 +528,19 @@ export class Vehicle {
     if (sb.state === 'drawing') {
       // reach over the right shoulder, take the hilt, bring it round to guard, light it
       const k = sb.t / 0.75;
-      if (k < 0.45) key = blend(this.armNowPose(), REACH, ease(k / 0.45));
+      if (k < 0.45) key = blend(this.poseNow, REACH, ease(k / 0.45));
       else key = blend(REACH, GUARD, ease((k - 0.45) / 0.55));
       if (k >= 0.45 && p.saberBack?.visible) { p.saberBack.visible = false; if (p.saberHand) p.saberHand.visible = true; }
       ignite = Math.max(0, Math.min(1, (k - 0.6) / 0.25));
       if (k >= 1) { sb.state = 'ready'; sb.t = 0; }
     } else if (sb.state === 'ready') {
-      key = { ...GUARD, rx: GUARD.rx + Math.sin(sb.t * 2.2) * 0.04 };
+      // breathing in the guard: a slow sway of the blade and the shoulders
+      key = { ...GUARD, ra: [GUARD.ra[0] + Math.sin(sb.t * 2.2) * 0.04, GUARD.ra[1], GUARD.ra[2]], up: [GUARD.up[0], GUARD.up[1] + Math.sin(sb.t * 1.1) * 0.04, 0] };
       ignite = 1;
     } else if (sb.state === 'slash') {
       const S = SLASHES[sb.combo];
       const k = sb.t / S.dur;
-      if (k < 0.3) key = blend(GUARD, S.wind, ease(k / 0.3));
+      if (k < 0.3) key = blend(this.poseNow, S.wind, ease(k / 0.3));
       else if (k < 0.55) key = blend(S.wind, S.strike, (k - 0.3) / 0.25); // the swing itself: fast and linear
       else if (k < 0.8) key = blend(S.strike, S.follow, ease((k - 0.55) / 0.25));
       else key = blend(S.follow, GUARD, ease((k - 0.8) / 0.2));
@@ -519,19 +556,23 @@ export class Vehicle {
     }
     sb.ignite = ignite;
     if (p.saberBlade) p.saberBlade.scale.z = Math.max(0.001, ignite * (0.96 + Math.random() * 0.08)); // a little shimmer
-    const a = p.arms![1];
-    a.rotation.order = 'YXZ';
-    a.rotation.set(key.rx, key.ry, key.rz);
-    p.body.rotation.y = key.tw;
-    // the free arm balances the swing
-    p.arms![0].rotation.x = 0.5 - key.tw * 0.6;
-    Object.assign(this.armNow, key);
+    const [ra, la] = [p.arms![1], p.arms![0]];
+    ra.rotation.order = la.rotation.order = 'YXZ';
+    ra.rotation.set(key.ra[0], key.ra[1], key.ra[2]);
+    la.rotation.set(key.la[0], key.la[1], key.la[2]);
+    p.upper?.rotation.set(key.up[0], key.up[1], key.up[2]);
+    // the stance: drop the hips, open the legs so the feet stay down (left foot leads for a right-handed cut)
+    const st = key.st * (1 - walk);
+    const drop = st * MAX_DROP;
+    const open = Math.acos(1 - drop / LEG);
+    p.legs![0].rotation.x = walkLegs[0] * walk + open * (1 - walk);
+    p.legs![1].rotation.x = walkLegs[1] * walk - open * 0.85 * (1 - walk);
+    p.legs![0].rotation.z = -0.08 * st;
+    p.legs![1].rotation.z = 0.08 * st;
+    this.poseNow = key;
+    return { drop, lunge: key.lunge * (1 - walk), hop: key.hop };
   }
 
-  private armNowPose(): Pose {
-    const a = this.parts.arms![1];
-    return { rx: a.rotation.x, ry: a.rotation.y, rz: a.rotation.z, tw: this.parts.body.rotation.y, lean: 0 };
-  }
 
   /** World direction the rifle points (robot only; falls back to the body's facing). */
   muzzleDir(out: THREE.Vector3) {
@@ -624,7 +665,12 @@ export class Vehicle {
       const armA = air ? -(0.15 + 0.35 * fwd) : -swing * 0.8;
       p.arms[0].rotation.x += (armA - p.arms[0].rotation.x) * Math.min(1, dt * 6);
       p.arms[0].rotation.z += ((air ? -0.18 : 0) - p.arms[0].rotation.z) * Math.min(1, dt * 6);
-      if (this.saber.state !== 'stowed') { this.poseSaber(dt); } else
+      let saberBody = { drop: 0, lunge: 0, hop: 0 };
+      if (this.saber.state !== 'stowed') {
+        // moving or airborne, the legs keep walking / trailing and the stance gives way
+        const walk = air ? 1 : Math.max(0, Math.min(1, (Math.abs(this.speed) - 1.5) / 3));
+        saberBody = this.poseSaber(dt, walk, [legA, legB]);
+      } else
       // the right arm (rifle) comes up and tracks the target, as far as a shoulder turns
       if (this.aimHold > 0) {
         this.aimHold -= dt;
@@ -650,10 +696,11 @@ export class Vehicle {
         p.arms[1].rotation.x = rest * (1 - this.aim) + this.aim * (Math.PI / 2 + this.armPitch);
         p.arms[1].rotation.y = this.aim * this.armYaw;
         p.arms[1].rotation.z = 0;
-        p.body.rotation.y = 0;
+        p.upper?.rotation.set(0, 0, 0);
       }
-      p.body.position.y = air ? 0 : Math.abs(Math.cos(this.stride)) * Math.min(0.5, Math.abs(this.speed) * 0.05);
-      p.body.rotation.x = (air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0) + (this.saber.state !== 'stowed' ? this.armNow.lean : 0); // lean into flight / the swing
+      const bob = air ? 0 : Math.abs(Math.cos(this.stride)) * Math.min(0.5, Math.abs(this.speed) * 0.05);
+      p.body.position.set(0, bob - saberBody.drop + saberBody.hop, -saberBody.lunge);
+      p.body.rotation.x = air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0; // lean into flight
       if (p.flames && p.thrusterMat) {
         for (const f of p.flames) f.scale.set(0.6 + this.thrust * 0.5, 0.001 + this.thrust * (1 + Math.random() * 0.25), 0.6 + this.thrust * 0.5);
         p.thrusterMat.emissiveIntensity = this.thrust * 2;
