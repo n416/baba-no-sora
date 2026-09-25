@@ -52,43 +52,44 @@ export const VEHICLES: Record<VehicleKind, VehicleSpec> = {
 // up: the upper body at the waist (x lean back +, y twist to the left +, z tilt)
 // st: stance 0..1 (hips drop, legs open front/back with the feet kept on the ground)
 // lunge: metres the body shifts forward over the front foot; hop: metres it rises
+// two: 0..1, how much the left hand is on the grip (1 = two-handed; `la` is ignored then)
 // wp: wrist -- 0 holds the blade at right angles to the forearm (up, in the guard), -PI/2 lays it along the arm
 // The arm's direction in the world is the upper-body twist PLUS the arm's ry: they must turn the same way
 // through a cut, or they cancel (the horizontal sweep once only covered 83 degrees because of that).
 type V3 = [number, number, number];
-interface Pose { ra: V3; la: V3; up: V3; st: number; lunge: number; hop: number; wp: number }
-const P = (ra: V3, la: V3, up: V3, st: number, lunge = 0, hop = 0, wp = 0): Pose => ({ ra, la, up, st, lunge, hop, wp });
+interface Pose { ra: V3; la: V3; up: V3; st: number; lunge: number; hop: number; wp: number; two: number }
+const P = (ra: V3, la: V3, up: V3, st: number, lunge = 0, hop = 0, wp = 0, two = 0): Pose => ({ ra, la, up, st, lunge, hop, wp, two });
 const REST_POSE = P([0, 0, 0], [0, 0, 0], [0, 0, 0], 0);
-const GUARD = P([1.15, 0.3, -0.15], [1.0, -0.45, 0.2], [-0.05, -0.2, 0], 0.35);
+const GUARD = P([1.15, 0.3, -0.15], [1.0, -0.45, 0.2], [-0.05, -0.2, 0], 0.35, 0, 0, 0, 1); // both hands on the grip
 const REACH = P([3.45, 0, 0.3], [0.35, 0, 0.15], [0.05, 0.25, -0.05], 0.15);
 /** The combo: a diagonal cut, a backhand sweep, a rising cut, a two-handed overhead finisher. */
 export const SLASHES: { name: string; dur: number; wind: Pose; strike: Pose; follow: Pose }[] = [
   // diagonal: the blade leans over the shoulder, then cuts down across the body
   { name: '袈裟斬り', dur: 0.5,
-    wind: P([3.0, -0.45, -0.5], [2.2, -0.3, 0.3], [0.12, -0.6, -0.12], 0.45, 0, 0, -0.2),
-    strike: P([1.0, 0.35, 0.35], [0.7, -0.2, 0.1], [-0.22, 0.4, 0.14], 0.8, 3, 0, -0.9),
+    wind: P([3.0, -0.45, -0.5], [2.2, -0.3, 0.3], [0.12, -0.6, -0.12], 0.45, 0, 0, -0.2, 0.8),
+    strike: P([1.0, 0.35, 0.35], [0.7, -0.2, 0.1], [-0.22, 0.4, 0.14], 0.8, 3, 0, -0.9, 0.4),
     follow: P([0.85, 0.75, 0.45], [0.45, 0.2, 0.2], [-0.24, 0.6, 0.16], 0.85, 3.5, 0, -0.45) },
   // horizontal: arm level, blade laid out along it, a flat arc from right to left at chest height
   { name: '横薙ぎ', dur: 0.5,
-    wind: P([1.5, -1.2, 0], [1.2, -0.9, 0.1], [0.02, -0.65, 0.06], 0.6, 0, 0, -1.4),
-    strike: P([1.55, 0.0, 0], [0.8, -0.2, 0.3], [-0.1, 0.0, 0], 0.8, 2, 0, -1.5),
-    follow: P([1.5, 1.2, 0], [0.4, 0.9, 0.5], [-0.08, 0.75, -0.06], 0.75, 2.5, 0, -1.45) },
+    wind: P([1.5, -1.2, 0], [1.2, -0.9, 0.1], [0.02, -0.65, 0.06], 0.6, 0, 0, -1.4, 1),
+    strike: P([1.55, 0.0, 0], [0.8, -0.2, 0.3], [-0.1, 0.0, 0], 0.8, 2, 0, -1.5, 1),
+    follow: P([1.5, 1.2, 0], [0.4, 0.9, 0.5], [-0.08, 0.75, -0.06], 0.75, 2.5, 0, -1.45, 1) },
   // rising: blade trailing low behind, swept up past the face
   { name: '斬り上げ', dur: 0.5,
-    wind: P([0.55, -0.6, 0.45], [0.4, 0.3, 0.2], [-0.3, 0.3, 0.08], 1.0, 0, 0, -0.25),
-    strike: P([2.1, 0.1, -0.2], [1.1, 0, 0.3], [0.05, -0.1, -0.05], 0.45, 2, 0, -0.9),
+    wind: P([0.55, -0.6, 0.45], [0.4, 0.3, 0.2], [-0.3, 0.3, 0.08], 1.0, 0, 0, -0.25, 0.7),
+    strike: P([2.1, 0.1, -0.2], [1.1, 0, 0.3], [0.05, -0.1, -0.05], 0.45, 2, 0, -0.9, 0.3),
     follow: P([3.0, 0.4, -0.3], [1.9, 0, 0.5], [0.22, -0.3, -0.1], 0.1, 2, 1.5, -0.7) },
   // overhead: blade back over the head, then straight down in line with the arms
   { name: '唐竹割り', dur: 0.75,
-    wind: P([3.55, 0.1, 0], [3.45, -0.25, -0.2], [0.28, 0, 0], 0.3, 0, 0.8, -0.3),
-    strike: P([1.35, 0.1, 0], [1.3, -0.35, -0.15], [-0.38, 0, 0], 1.0, 5, 0, -0.85),
-    follow: P([1.15, 0.1, 0], [1.1, -0.35, -0.1], [-0.36, 0, 0], 0.95, 5.5, 0, -0.4) },
+    wind: P([3.55, 0.1, 0], [3.45, -0.25, -0.2], [0.28, 0, 0], 0.3, 0, 0.8, -0.3, 1),
+    strike: P([1.35, 0.1, 0], [1.3, -0.35, -0.15], [-0.38, 0, 0], 1.0, 5, 0, -0.85, 1),
+    follow: P([1.15, 0.1, 0], [1.1, -0.35, -0.1], [-0.36, 0, 0], 0.95, 5.5, 0, -0.4, 1) },
 ];
 const lerpV = (a: V3, b: V3, k: number): V3 => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 const ease = (k: number) => { const x = Math.max(0, Math.min(1, k)); return x * x * (3 - 2 * x); };
 /** Pose -> flat number list and back, for the spline. */
-const flatPose = (q: Pose) => [...q.ra, ...q.la, ...q.up, q.st, q.lunge, q.hop, q.wp];
-const unflatPose = (a: number[]): Pose => ({ ra: [a[0], a[1], a[2]], la: [a[3], a[4], a[5]], up: [a[6], a[7], a[8]], st: a[9], lunge: a[10], hop: a[11], wp: a[12] });
+const flatPose = (q: Pose) => [...q.ra, ...q.la, ...q.up, q.st, q.lunge, q.hop, q.wp, q.two];
+const unflatPose = (a: number[]): Pose => ({ ra: [a[0], a[1], a[2]], la: [a[3], a[4], a[5]], up: [a[6], a[7], a[8]], st: a[9], lunge: a[10], hop: a[11], wp: a[12], two: Math.max(0, Math.min(1, a[13])) });
 /**
  * Non-uniform Catmull-Rom through `keys` at `times` (0..1), with zero speed at both
  * ends: continuous position AND velocity at every key.
@@ -110,7 +111,22 @@ function splinePose(keys: Pose[], times: number[], k: number): Pose {
 const blend = (a: Pose, b: Pose, k: number): Pose => ({
   ra: lerpV(a.ra, b.ra, k), la: lerpV(a.la, b.la, k), up: lerpV(a.up, b.up, k),
   st: a.st + (b.st - a.st) * k, lunge: a.lunge + (b.lunge - a.lunge) * k, hop: a.hop + (b.hop - a.hop) * k, wp: a.wp + (b.wp - a.wp) * k,
+  two: a.two + (b.two - a.two) * k,
 });
+/** Robot arm: shoulder -> elbow -> centre of the hand. */
+const UPPER_ARM = 4.25, FOREARM = 4.25;
+/** Elbow to the saber's hilt (the right hand holds it just past the hand's centre). */
+const SABER_REACH = 5.15;
+const _g = new THREE.Vector3(), _n = new THREE.Vector3(), _u = new THREE.Vector3(), _nl = new THREE.Vector3();
+const _pole = new THREE.Vector3(-0.6, -0.8, 0.3).normalize(); // the left elbow points down and out to the left
+const _poleR = new THREE.Vector3(0.6, -0.8, 0.3).normalize(); // the right one down and out to the right
+/** The point in front of the chest (upper-body frame) that a two-handed grip draws the hands toward. */
+const _chest = new THREE.Vector3(0, 3.2, -6.5);
+const _h2 = new THREE.Vector3(), _t2 = new THREE.Vector3();
+const _qSaber = new THREE.Quaternion(), _qParent = new THREE.Quaternion();
+const _down = new THREE.Vector3(0, -1, 0);
+const _qIK = new THREE.Quaternion(), _qInv = new THREE.Quaternion();
+
 /** Robot leg: hip -> knee -> ankle, and the ankle's height above the sole. */
 const THIGH = 3.9, SHIN = 3.9, ANKLE = 1.2, HIP = 9;
 /** Where the feet stand in the guard (local z, forward is -): left foot leads. */
@@ -170,6 +186,10 @@ export interface VehicleBody {
   /** Robot: shin pivots at the knees (bend about X) and feet at the ankles (kept level). */
   shins?: THREE.Group[];
   feet?: THREE.Group[];
+  /** Robot: the left forearm's pivot, bent to bring the left hand onto the saber's grip. */
+  leftElbow?: THREE.Group;
+  /** Robot: the right forearm's pivot (the rifle and the saber hang from it). */
+  rightElbow?: THREE.Group;
 }
 
 function wheel(r: number, width: number) {
@@ -431,24 +451,31 @@ function buildRobot(): VehicleBody {
   // arms: shoulder pivot at y 14.3
   const arms: THREE.Group[] = [];
   let muzzle: THREE.Object3D | undefined;
+  let leftElbow: THREE.Group | undefined, rightElbow: THREE.Group | undefined;
   for (const s of [-1, 1]) {
     const arm = new THREE.Group();
     arm.position.set(s * 4.9, 14.3, 0);
     arm.add(box(2.8, 2.6, 3.0, cream, 0, -1.1, 0)); // shoulder armour
     arm.add(box(0.4, 2.2, 3.1, orange, s * 1.45, -1.0, 0));
     arm.add(box(1.5, 3.2, 1.6, dark, 0, -4.2, 0)); // upper arm
-    arm.add(box(2.0, 3.6, 2.2, cream, 0, -7.9, 0)); // forearm
-    arm.add(box(1.6, 1.4, 1.6, dark, 0, -9.2, 0)); // hand
+    // forearm and hand hang from an elbow pivot, so the free hand can reach the saber's grip
+    const elbow = new THREE.Group();
+    elbow.position.y = -UPPER_ARM;
+    elbow.add(box(2.0, 3.6, 2.2, cream, 0, -7.9 + UPPER_ARM, 0)); // forearm
+    elbow.add(box(1.6, 1.4, 1.6, dark, 0, -9.2 + UPPER_ARM, 0)); // hand
+    arm.add(elbow);
+    if (s < 0) leftElbow = elbow;
+    else rightElbow = elbow;
     if (s > 0) {
-      // beam rifle along the outside of the forearm: it points wherever the arm points
+      // beam rifle along the outside of the forearm: it points wherever the forearm points
       const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.5, 6.0, 10), steel);
-      barrel.position.set(1.2, -8.4, -0.3);
-      arm.add(barrel);
-      arm.add(box(1.0, 2.4, 1.2, teal, 1.2, -7.4, -0.3)); // housing
-      arm.add(box(0.7, 0.4, 0.7, M('#8ff4ff'), 1.2, -11.6, -0.3)); // emitter
+      barrel.position.set(1.2, -8.4 + UPPER_ARM, -0.3);
+      elbow.add(barrel);
+      elbow.add(box(1.0, 2.4, 1.2, teal, 1.2, -7.4 + UPPER_ARM, -0.3)); // housing
+      elbow.add(box(0.7, 0.4, 0.7, M('#8ff4ff'), 1.2, -11.6 + UPPER_ARM, -0.3)); // emitter
       muzzle = new THREE.Object3D();
-      muzzle.position.set(1.2, -11.6, -0.3);
-      arm.add(muzzle);
+      muzzle.position.set(1.2, -11.6 + UPPER_ARM, -0.3);
+      elbow.add(muzzle);
     }
     body.add(arm);
     arms.push(arm);
@@ -462,7 +489,7 @@ function buildRobot(): VehicleBody {
   body.add(saberBack);
   // ... and the same hilt in the right hand, with a blade that ignites out of it along -z
   const saberHand = new THREE.Group();
-  saberHand.position.set(0, -9.4, -0.2);
+  saberHand.position.set(0, -9.4 + UPPER_ARM, -0.2);
   const hilt = new THREE.Mesh(hiltGeo, steel);
   hilt.rotation.x = Math.PI / 2;
   saberHand.add(hilt, box(0.9, 0.5, 0.5, dark, 0, -0.2, -1.1));
@@ -482,7 +509,7 @@ function buildRobot(): VehicleBody {
   blade.scale.z = 0.001;
   saberHand.add(blade);
   saberHand.visible = false;
-  arms[1].add(saberHand);
+  rightElbow!.add(saberHand);
   // the waist: move everything that is not legs or pelvis under a pivot at hip height
   const upper = new THREE.Group();
   upper.position.y = 9.6;
@@ -491,7 +518,7 @@ function buildRobot(): VehicleBody {
   for (const c of [...body.children]) if (c !== upper && !legs.includes(c as THREE.Group) && !lower.includes(c as THREE.Mesh)) upper.attach(c);
   upper.rotation.order = 'YXZ';
   addOutline(body);
-  return { root, body, wheels: [], legs, shins, feet, arms, flames, thrusterMat, muzzle, saberBack, saberHand, saberBlade: blade, saberBase, saberTip, upper };
+  return { root, body, wheels: [], legs, shins, feet, arms, leftElbow, rightElbow, flames, thrusterMat, muzzle, saberBack, saberHand, saberBlade: blade, saberBase, saberTip, upper };
 }
 
 const BUILDERS: Record<VehicleKind, () => VehicleBody> = {
@@ -558,6 +585,9 @@ export class Vehicle {
     if (p.upper) p.upper.rotation.set(0, 0, 0);
     this.poseNow = REST_POSE;
     this.hipS = HIP;
+    p.leftElbow?.quaternion.identity();
+    p.rightElbow?.quaternion.identity();
+    p.saberHand?.quaternion.identity();
   }
   drawSaber() { if (this.saber.state === 'stowed' || this.saber.state === 'stowing') { this.saber.state = 'drawing'; this.saber.t = 0; } }
   stowSaber() { if (this.saber.state !== 'stowed' && this.saber.state !== 'stowing') { this.saber.state = 'stowing'; this.saber.t = 0; } }
@@ -632,7 +662,7 @@ export class Vehicle {
     ra.rotation.set(key.ra[0], key.ra[1], key.ra[2]);
     la.rotation.set(key.la[0], key.la[1], key.la[2]);
     p.upper?.rotation.set(key.up[0], key.up[1], key.up[2]);
-    if (p.saberHand) p.saberHand.rotation.x = key.wp; // the wrist
+    if (p.saberHand) { p.saberHand.quaternion.identity(); p.saberHand.rotation.x = key.wp; } // the wrist (the grip may re-orient it)
     // ---- footwork -------------------------------------------------------------------
     // Feet are placed in the robot's local z (forward -).  A cut is a lunge and a
     // recovery, and every foot position is continuous from frame to frame:
@@ -702,6 +732,51 @@ export class Vehicle {
     return { drop, lunge: 0, hop: 0 };
   }
 
+
+  /**
+   * Two-handed grip.  The keyframes move a straight right arm; for a two-handed
+   * hold the right hand is drawn in toward the middle of the chest (elbow bent,
+   * two-bone IK) while the saber keeps exactly the world orientation the
+   * keyframe gave it -- so the cut's blade path is unchanged -- and the left hand
+   * is solved onto the grip just behind the right fist.  `two` blends it all in.
+   */
+  private gripLeft(two: number) {
+    const p = this.parts, armL = p.arms?.[0], armR = p.arms?.[1], elL = p.leftElbow, elR = p.rightElbow, hilt = p.saberHand;
+    if (!armL || !armR || !elL || !elR || !hilt) return;
+    // start from straight elbows every frame: last frame's bend must not leak into this frame's pose
+    elL.quaternion.identity();
+    elR.quaternion.identity();
+    if (two <= 0.001) return;
+    p.root.updateMatrixWorld(true);
+    const upper = armR.parent!;
+    // 1. where the straight arm put the right hand, and how the saber is oriented in the world
+    const handStraight = upper.worldToLocal(hilt.getWorldPosition(_g)).clone();
+    hilt.getWorldQuaternion(_qSaber);
+    // 2. draw the hands in toward a point in front of the chest (upper-body frame)
+    const hand = _h2.copy(handStraight).lerp(_chest, 0.6 * two);
+    this.solveArm(armR, elR, hand, _poleR, two, SABER_REACH); // the hilt sits a little past the hand's centre
+    // 3. keep the saber's world orientation: undo what the bent arm did to it
+    p.root.updateMatrixWorld(true);
+    elR.getWorldQuaternion(_qParent);
+    hilt.quaternion.copy(_qParent.invert().multiply(_qSaber));
+    p.root.updateMatrixWorld(true);
+    // 4. the left hand onto the grip, pommel side of the right fist
+    const target = upper.worldToLocal(hilt.localToWorld(_g.set(0, 0, 1.6)));
+    this.solveArm(armL, elL, target, _pole, two, FOREARM);
+  }
+
+  /** Two-bone IK for one arm toward `target` (the upper body's frame), elbow toward `pole`, blended by `w`. */
+  private solveArm(arm: THREE.Group, elbow: THREE.Group, target: THREE.Vector3, pole: THREE.Vector3, w: number, fore: number) {
+    const t = _t2.copy(target).sub(arm.position);
+    const c = Math.min(t.length(), UPPER_ARM + fore - 0.05);
+    const dir = t.normalize();
+    const n = _n.crossVectors(dir, pole).normalize();
+    const alpha = Math.acos(Math.max(-1, Math.min(1, (UPPER_ARM ** 2 + c * c - fore ** 2) / (2 * UPPER_ARM * c))));
+    _qIK.setFromUnitVectors(_down, _u.copy(dir).applyAxisAngle(n, alpha));
+    arm.quaternion.slerp(_qIK, w);
+    const interior = Math.acos(Math.max(-1, Math.min(1, (UPPER_ARM ** 2 + fore ** 2 - c * c) / (2 * UPPER_ARM * fore))));
+    elbow.quaternion.setFromAxisAngle(_nl.copy(n).applyQuaternion(_qInv.copy(_qIK).invert()), -(Math.PI - interior) * w);
+  }
 
   /** World direction the rifle points (robot only; falls back to the body's facing). */
   muzzleDir(out: THREE.Vector3) {
@@ -836,6 +911,7 @@ export class Vehicle {
       const bob = air ? 0 : Math.abs(Math.cos(this.stride)) * Math.min(0.5, Math.abs(this.speed) * 0.05);
       p.body.position.set(0, bob - saberBody.drop + saberBody.hop, -saberBody.lunge);
       p.root.position.set(this.pos.x, this.pos.y, this.pos.z); // the saber step moved pos this frame
+      this.gripLeft(this.saber.state === 'stowed' ? 0 : this.poseNow.two * (p.saberHand?.visible ? 1 : 0));
       p.body.rotation.x = air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0; // lean into flight
       if (p.flames && p.thrusterMat) {
         for (const f of p.flames) f.scale.set(0.6 + this.thrust * 0.5, 0.001 + this.thrust * (1 + Math.random() * 0.25), 0.6 + this.thrust * 0.5);
