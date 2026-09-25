@@ -20,6 +20,8 @@ import * as THREE from 'three';
  * there rests on cel materials and inverted-hull outlines alone.
  */
 
+const _fwd = new THREE.Vector3(), _sp = new THREE.Vector3();
+
 export interface GradeParams {
   shadowTone: THREE.Color; // added to the darks
   highlightTone: THREE.Color; // multiplied into the lights
@@ -32,6 +34,13 @@ export class Pipeline {
   readonly renderer: THREE.WebGLRenderer;
   readonly rt: THREE.WebGLRenderTarget;
   inkOn = true;
+  /** Sun glare: set from the clock each frame (main.ts). */
+  readonly sunDir = new THREE.Vector3(0, 1, 0);
+  readonly sunColor = new THREE.Color('#fff0d0');
+  sunStrength = 0;
+  glareOn = true;
+  /** Draw calls of the scene pass alone (renderer.info only keeps the last pass: the post quad). */
+  sceneCalls = 0;
   /** internal resolution relative to the canvas; the final pass filters it down */
   scale = 1.5;
   gradeOn = true;
@@ -65,14 +74,18 @@ export class Pipeline {
         uNear: { value: 0.1 },
         uFar: { value: 2000 },
         uInk: { value: 1 },
-        uInkColor: { value: new THREE.Color('#2b2533') },
-        uInkFade: { value: new THREE.Vector2(35, 140) },
+        uInkColor: { value: new THREE.Color('#2a2c52') }, // navy, not black: thin painted lines
+        uInkFade: { value: new THREE.Vector2(28, 110) },
         uGrade: { value: 1 },
         uShadowTone: { value: this.grade.shadowTone },
         uHighlightTone: { value: this.grade.highlightTone },
         uLift: { value: this.grade.lift },
         uSat: { value: this.grade.saturation },
         uVignette: { value: this.grade.vignette },
+        uSunUv: { value: new THREE.Vector2(0.5, 0.5) },
+        uSunGlow: { value: 0 },
+        uSunCol: { value: this.sunColor },
+        uAspect: { value: 16 / 9 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -84,6 +97,9 @@ export class Pipeline {
         uniform float uNear, uFar, uInk, uGrade, uLift, uSat, uVignette;
         uniform vec3 uInkColor, uShadowTone, uHighlightTone;
         uniform vec2 uInkFade;
+        uniform vec2 uSunUv;
+        uniform float uSunGlow, uAspect;
+        uniform vec3 uSunCol;
         varying vec2 vUv;
 
         float lin(vec2 uv) {
@@ -107,7 +123,30 @@ export class Pipeline {
             float neg = -min(min(s1, s2), min(s3, s4)) / c;
             float ink = smoothstep(0.018, 0.05, pos) + 0.4 * smoothstep(0.03, 0.08, neg);
             ink *= 1.0 - smoothstep(uInkFade.x, uInkFade.y, c);
-            col = mix(col, uInkColor, clamp(ink, 0.0, 1.0) * 0.85);
+            col = mix(col, uInkColor, clamp(ink, 0.0, 1.0) * 0.62);
+          }
+
+          // Shinkai glare: a bloom round the sun and faint ghosts across the frame,
+          // gated by how much of the sun's disc is open sky in the depth buffer
+          if (uSunGlow > 0.001) {
+            float open = 0.0;
+            for (float oy = -1.0; oy <= 1.0; oy += 1.0)
+              for (float ox = -1.0; ox <= 1.0; ox += 1.0)
+                open += step(0.99999, texture2D(tDepth, clamp(uSunUv + vec2(ox, oy) * vec2(0.010, 0.010 * uAspect), 0.001, 0.999)).x);
+            open /= 9.0;
+            vec2 sd = vUv - uSunUv; sd.x *= uAspect;
+            float d = length(sd);
+            float g = exp(-d * 7.0) * 0.6 + exp(-d * 2.2) * 0.22;
+            vec2 axis = vec2(0.5) - uSunUv;
+            vec3 ghosts = vec3(0.0);
+            for (float k = 1.0; k <= 3.0; k += 1.0) {
+              vec2 gp = uSunUv + axis * (0.55 + 0.5 * k);
+              vec2 gd = vUv - gp; gd.x *= uAspect;
+              float ring = smoothstep(0.035 * k + 0.02, 0.0, length(gd));
+              ghosts += ring * 0.07 * vec3(0.6 + 0.4 * k / 3.0, 0.8, 1.2 - 0.3 * k / 3.0);
+            }
+            float onScreen = smoothstep(0.35, 0.0, max(max(-uSunUv.x, uSunUv.x - 1.0), max(-uSunUv.y, uSunUv.y - 1.0)));
+            col += (uSunCol * g + ghosts * uSunCol) * uSunGlow * open * onScreen;
           }
 
           if (uGrade > 0.5) {
@@ -146,6 +185,7 @@ export class Pipeline {
       // VR: straight to the headset, no post (see header)
       r.setRenderTarget(null);
       r.render(scene, camera);
+      this.sceneCalls = r.info.render.calls;
       return;
     }
     const u = this.mat.uniforms;
@@ -156,8 +196,20 @@ export class Pipeline {
     u.uLift.value = this.grade.lift;
     u.uSat.value = this.grade.saturation;
     u.uVignette.value = this.grade.vignette;
+    // where the sun lands on screen, and whether it is in front of the camera at all
+    camera.updateMatrixWorld();
+    camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+    camera.getWorldDirection(_fwd);
+    const facing = _fwd.dot(this.sunDir);
+    if (this.glareOn && this.sunStrength > 0 && facing > 0.05) {
+      camera.getWorldPosition(_sp).addScaledVector(this.sunDir, 1000).project(camera);
+      (u.uSunUv.value as THREE.Vector2).set(_sp.x * 0.5 + 0.5, _sp.y * 0.5 + 0.5);
+      u.uSunGlow.value = this.sunStrength * Math.min(1, facing * 3);
+    } else u.uSunGlow.value = 0;
+    u.uAspect.value = camera.aspect;
     r.setRenderTarget(this.rt);
     r.render(scene, camera);
+    this.sceneCalls = r.info.render.calls;
     r.setRenderTarget(null);
     r.render(this.quadScene, this.quadCam);
   }

@@ -4,9 +4,10 @@ import { Road } from './road';
 import { cel } from '../render/toon';
 import { PAL, seasonal, type SeasonPalette } from '../render/palette';
 import type { WorldConfig } from '../config';
-import { rng, smoothstep } from '../core/util';
+import { rng } from '../core/util';
 
-export interface Collider { x0: number; z0: number; x1: number; z1: number; top: number }
+/** An XZ box from `bottom` (default: the ground) up to `top`.  A bottom lets things pass under (the rail bridge). */
+export interface Collider { x0: number; z0: number; x1: number; z1: number; top: number; bottom?: number }
 export interface Platform { x0: number; z0: number; x1: number; z1: number; y: number }
 
 /**
@@ -16,6 +17,48 @@ export interface Platform { x0: number; z0: number; x1: number; z1: number; y: n
  *   road                     the centreline (guide rails, autodrive, viewpoints)
  * Builders never touch these arrays directly; they go through `ctx`.
  */
+/**
+ * Merge a prop's meshes per material into one group with the same origin, so
+ * it can still be moved as a whole.  Outline hulls and noBake meshes are kept as-is.
+ */
+export function compact(o: THREE.Object3D) {
+  o.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(o.matrixWorld).invert();
+  const buckets = new Map<THREE.Material, { cast: boolean; geos: THREE.BufferGeometry[] }>();
+  const keep: THREE.Object3D[] = [];
+  o.traverse((c) => {
+    const m = c as THREE.Mesh;
+    if (!m.isMesh) return;
+    if (Array.isArray(m.material) || m.userData.isOutline || m.userData.noBake) { if (!m.userData.isOutline) keep.push(m); return; }
+    let geo = m.geometry.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+    if (geo.index) geo = geo.toNonIndexed();
+    for (const name of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(name)) geo.deleteAttribute(name);
+    if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
+    let b = buckets.get(m.material);
+    if (!b) buckets.set(m.material, (b = { cast: m.castShadow, geos: [] }));
+    b.geos.push(geo);
+  });
+  const out = new THREE.Group();
+  out.position.copy(o.position);
+  out.quaternion.copy(o.quaternion);
+  out.scale.copy(o.scale);
+  for (const [mat, b] of buckets) {
+    const merged = mergeGeometries(b.geos, false);
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.castShadow = b.cast;
+    mesh.receiveShadow = true;
+    out.add(mesh);
+  }
+  for (const k of keep) {
+    const clone = k.clone();
+    k.updateMatrixWorld();
+    clone.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, k.matrixWorld).multiply(new THREE.Matrix4().copy(k.matrix).invert()));
+    out.add(clone);
+  }
+  return out;
+}
+
 export class World {
   readonly group = new THREE.Group();
   /** Built once, then merged per material by `bake()` -- draw calls are the budget. */
@@ -35,16 +78,9 @@ export class World {
   }
 
   // ---- terrain ---------------------------------------------------------------
-  /** Natural ground: flat along the road corridor, rising into low hills away from it. */
-  terrainAt(x: number, z: number, roadDist?: number) {
-    const d = roadDist ?? this.road.nearest(x, z).dist;
-    const m = smoothstep(38, 120, d);
-    if (m <= 0) return 0;
-    const n =
-      Math.sin(x * 0.021 + 1.3) * Math.cos(z * 0.017 - 0.4) * 0.6 +
-      Math.sin(x * 0.047 - z * 0.031 + 2.1) * 0.25 +
-      0.35;
-    return m * m * Math.max(0, n) * 26;
+  /** Tokyo lowland: flat.  Kept as a function so a slope (Waseda-dori's hill) can be added later. */
+  terrainAt(_x: number, _z: number, _roadDist?: number) {
+    return 0;
   }
 
   heightAt(x: number, z: number, fromY?: number) {
@@ -73,8 +109,10 @@ export class World {
     add: (o: THREE.Object3D) => { this.staticGroup.add(o); return o; },
     /** Anything that moves, glows per-frame, or keeps its own identity. */
     addDynamic: (o: THREE.Object3D) => { this.group.add(o); return o; },
-    collide: (x0: number, z0: number, x1: number, z1: number, top = 3) => {
-      this.colliders.push({ x0: Math.min(x0, x1), z0: Math.min(z0, z1), x1: Math.max(x0, x1), z1: Math.max(z0, z1), top });
+    /** A moving prop made of many meshes: merge them per material first (a car is ~12 draw calls otherwise). */
+    addMoving: (o: THREE.Object3D) => { const c = compact(o); this.group.add(c); return c; },
+    collide: (x0: number, z0: number, x1: number, z1: number, top = 3, bottom?: number) => {
+      this.colliders.push({ x0: Math.min(x0, x1), z0: Math.min(z0, z1), x1: Math.max(x0, x1), z1: Math.max(z0, z1), top, bottom });
     },
     /** Collider from an object's world bounds (conservative for rotated things). */
     collideObject: (o: THREE.Object3D, pad = 0) => {
@@ -92,22 +130,18 @@ export class World {
 
   /** Ground mesh + road ribbon.  Called by buildWorld before the layout. */
   buildGround() {
-    const size = 900, seg = 180;
+    // city ground: pale concrete with faint patches; blocks and streets are drawn over it by the layout
+    const size = 1800, seg = 90;
     const g = new THREE.PlaneGeometry(size, size, seg, seg);
     g.rotateX(-Math.PI / 2);
-    const cx = this.road.samples[Math.floor(this.road.samples.length / 2)];
-    g.translate(cx.x, 0, cx.z);
     const pos = g.attributes.position as THREE.BufferAttribute;
     const colors = new Float32Array(pos.count * 3);
-    const cGrass = new THREE.Color(this.pal.grass), cDry = new THREE.Color(this.pal.grassDry), cHill = new THREE.Color(this.pal.hill);
+    const cA = new THREE.Color(PAL.ground), cB = new THREE.Color(PAL.groundAlt);
     const c = new THREE.Color();
     const r = rng(3);
     for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), z = pos.getZ(i);
-      const d = this.road.nearest(x, z).dist;
-      const h = this.terrainAt(x, z, d);
-      pos.setY(i, h - 0.02);
-      c.copy(cGrass).lerp(cDry, r.next() * 0.35).lerp(cHill, smoothstep(2, 14, h));
+      pos.setY(i, -0.02);
+      c.copy(cA).lerp(cB, r.next() * 0.6);
       colors.set([c.r, c.g, c.b], i * 3);
     }
     g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -117,11 +151,15 @@ export class World {
     ground.userData.noBake = true;
     this.group.add(ground);
 
-    // road: asphalt over dirt shoulders, both following the ground exactly (it is 0 here)
+    // Waseda-dori: asphalt between tiled sidewalks
     const half = this.road.width / 2;
+    const walk = cel(PAL.sidewalk, { ramp: 'soft' }), curb = cel(PAL.curb, { ramp: 'soft' });
     this.group.add(
-      this.ribbon(-half - this.road.shoulder, half + this.road.shoulder, 0.015, cel(PAL.asphaltEdge, { ramp: 'soft' })),
       this.ribbon(-half, half, 0.03, cel(PAL.asphalt, { ramp: 'soft' })),
+      this.ribbon(-half - this.road.shoulder, -half - 0.25, 0.14, walk),
+      this.ribbon(half + 0.25, half + this.road.shoulder, 0.14, walk),
+      this.ribbon(-half - 0.25, -half, 0.15, curb),
+      this.ribbon(half, half + 0.25, 0.15, curb),
     );
   }
 

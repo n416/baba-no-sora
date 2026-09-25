@@ -5,7 +5,7 @@
 
 export type Season = 'spring' | 'earlySummer' | 'summer' | 'autumn' | 'winter';
 export type Mobility = 'walk' | 'ride' | 'both';
-export type VehicleKind = 'bicycle' | 'scooter' | 'keiTruck';
+export type VehicleKind = 'bicycle' | 'scooter' | 'keiTruck' | 'wingCar';
 export type People = 'none' | 'background' | 'protagonist';
 
 export interface WorldConfig {
@@ -25,14 +25,14 @@ export interface WorldConfig {
 }
 
 export const CONFIG: WorldConfig = {
-  title: 'Explore3D Template',
-  season: 'earlySummer',
-  latitude: 35.4,
+  title: '馬場の空 — 秋',
+  season: 'autumn',
+  latitude: 35.71,
   mobility: 'both',
-  vehicle: 'bicycle',
-  startTime: 15.5,
-  dayLengthSeconds: 60,
-  people: 'none',
+  vehicle: 'wingCar',
+  startTime: 16.0,
+  dayLengthSeconds: 90,
+  people: 'background',
 };
 
 /** URL overrides, handy for shots and tests: ?time=18.2&season=autumn&mobility=walk */
@@ -46,6 +46,6 @@ export function applyUrlOverrides(cfg: WorldConfig): WorldConfig {
   const m = q.get('mobility') as Mobility | null;
   if (m && ['walk', 'ride', 'both'].includes(m)) out.mobility = m;
   const v = q.get('vehicle') as VehicleKind | null;
-  if (v && ['bicycle', 'scooter', 'keiTruck'].includes(v)) out.vehicle = v;
+  if (v && ['bicycle', 'scooter', 'keiTruck', 'wingCar'].includes(v)) out.vehicle = v;
   return out;
 }

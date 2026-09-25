@@ -45,7 +45,7 @@ try {
     })(),
   }));
   const times = TIMES[0] === 'key'
-    ? [info.keyTimes[0], 12, info.keyTimes[3], info.keyTimes[4]] // morning, noon, sunset, night
+    ? [info.keyTimes[0], 12, +(info.keyTimes[3] - 0.45).toFixed(2), info.keyTimes[4]] // morning, noon, low evening sun, night
     : TIMES.map(Number);
   if (/swiftshader|llvmpipe|software/i.test(info.renderer)) console.warn(`WARNING: software renderer (${info.renderer}) -- perf numbers are meaningless`);
 

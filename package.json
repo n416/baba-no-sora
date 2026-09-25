@@ -1,9 +1,9 @@
 {
-  "name": "explore3d-template",
+  "name": "baba-no-sora",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "A walk/ride-able anime-background 3D world template (Three.js, cel shading, time-of-day, WebXR) meant to be reshaped by Claude Code from PROMPT.md.",
+  "description": "Takadanobaba in autumn, Shinkai-style: drive a winged car down Waseda-dori, take off and fly over the city (built from explore3d-template).",
   "license": "MIT",
   "engines": {
     "node": ">=18"

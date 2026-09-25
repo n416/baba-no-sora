@@ -4,11 +4,13 @@ import { Pipeline } from './render/post';
 import { shadowTint, setGlow } from './render/toon';
 import { outlineUniforms } from './render/outline';
 import { World } from './world/world';
+import { lampPoolMaterial } from './world/city';
 import { buildLayout } from './world/layout';
 import { Sky } from './world/sky';
 import { TimeOfDay } from './world/timeofday';
 import { SeasonalParticles } from './world/particles';
 import { COURSE, type Viewpoint } from './world/course';
+import { cruiseNearest } from './world/cruise';
 import { Player } from './player/player';
 import { XRSupport } from './xr/xr';
 import { Hud } from './ui/hud';
@@ -26,7 +28,7 @@ renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 2400);
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 2600);
 const rig = new THREE.Group(); // XR moves the camera inside this; we move the rig
 rig.add(camera);
 scene.add(rig);
@@ -67,7 +69,7 @@ xr.onSession((on) => {
   sun.shadow.mapSize.setScalar(on ? 1024 : 2048);
   sun.shadow.map?.dispose();
   (sun.shadow as { map: THREE.WebGLRenderTarget | null }).map = null;
-  hud.toast(on ? 'VR: 右トリガー 前進 / 右スティック 旋回 / A 乗り降り' : 'VR 終了');
+  hud.toast(on ? 'VR: 右トリガー 加速 / 右スティック 旋回・上に倒して離陸 / 左スティック 上昇下降 / X 長押し 遊覧 / A 乗り降り' : 'VR 終了');
 });
 
 // ---- time of day -> everything ---------------------------------------------
@@ -89,7 +91,8 @@ function applyLook() {
   const fog = scene.fog as THREE.Fog;
   fog.color.copy(L.fog);
   fog.far = L.fogFar;
-  fog.near = L.fogFar * 0.18;
+  // low sun: keep the near street clear of haze so the gold-vs-violet contrast survives
+  fog.near = L.fogFar * (0.18 + 0.2 * (1 - THREE.MathUtils.smoothstep(tod.elevation, 8, 25)) * THREE.MathUtils.smoothstep(tod.elevation, -4, 1));
   sky.uniforms.uZenith.value.copy(L.zenith);
   sky.uniforms.uHorizon.value.copy(L.horizon);
   sky.uniforms.uGround.value.copy(L.fog);
@@ -97,15 +100,25 @@ function applyLook() {
   sky.uniforms.uSunColor.value.copy(L.sun);
   sky.uniforms.uSunVis.value = THREE.MathUtils.smoothstep(tod.elevation, -3, 1);
   sky.uniforms.uStars.value = L.stars;
-  sky.hillMat.color.copy(L.hill);
-  sky.hillNearMat.color.copy(L.hill).lerp(_seasonHill, 0.35 * L.daylight);
+  // far city sits in the haze: mostly fog colour, a little bluer
+  sky.hillMat.color.copy(L.fog).lerp(L.hill, 0.45);
+  // the high cloud sheet: white by day, lit gold then rose from below at sunset, violet at night
+  _cloud.copy(L.sun).lerp(_white, THREE.MathUtils.smoothstep(tod.elevation, 2, 30) * 0.85);
+  _cloud.lerp(L.horizon, 0.25).multiplyScalar(0.35 + 0.65 * THREE.MathUtils.smoothstep(tod.elevation, -8, 2));
+  sky.cloudHighMat.color.copy(_cloud);
+  sky.cloudLowMat.color.copy(_cloud).lerp(L.horizon, 0.15);
+  sky.hillNearMat.color.copy(L.fog).lerp(L.hill, 0.3);
   shadowTint.value.copy(L.tint);
+  lampPoolMaterial.opacity = L.glow * 0.24;
+  pipeline.sunDir.copy(tod.sunDir);
+  pipeline.sunColor.copy(L.sun);
+  pipeline.sunStrength = THREE.MathUtils.smoothstep(tod.elevation, -2.5, 1.5) * (0.55 + 0.45 * (1 - THREE.MathUtils.smoothstep(tod.elevation, 10, 40)));
   setGlow(L.glow);
   pipeline.grade.shadowTone.copy(L.shadowTone);
   pipeline.grade.highlightTone.copy(L.highlight);
   if (player.vehicle?.parts.lamp) player.vehicle.parts.lamp.emissiveIntensity = L.glow;
 }
-const _seasonHill = new THREE.Color(world.pal.hill);
+const _cloud = new THREE.Color(), _white = new THREE.Color('#ffffff');
 tod.onChange(applyLook);
 
 /** T jumps through the moments worth seeing.  Computed from the sun, so they move with the season. */
@@ -175,6 +188,9 @@ window.addEventListener('keydown', (e) => {
     case 'KeyF':
       if (player.toggleMount()) hud.toast(player.mode === 'ride' ? `${player.vehicle!.spec.name}に乗った` : '降りた');
       break;
+    case 'KeyC':
+      toggleCruise();
+      break;
     case 'KeyV':
       player.view = player.view === 'first' ? 'third' : 'first';
       break;
@@ -207,11 +223,27 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => player.keys.delete(e.code));
 
+/** C: sightseeing flight on/off.  Needs the flying machine and to be riding it. */
+function toggleCruise() {
+  const v = player.vehicle;
+  if (!v?.spec.flight || player.mode !== 'ride') { hud.toast('遊覧飛行は翼のある車に乗って'); return; }
+  player.cruise = !player.cruise;
+  hud.toast(player.cruise ? (v.airborne ? '遊覧飛行 ON' : '遊覧飛行：離陸します') : '遊覧飛行 OFF（手動）');
+}
+xr.onCruise(toggleCruise);
+
 function updateHint() {
   if (!hintOn || !player.locked) { hud.hint(''); return; }
   const v = player.vehicle;
-  if (player.mode === 'walk' && v && cfg.mobility === 'both' && player.pos.distanceTo(v.pos) < 2.8) hud.hint(`F で${v.spec.name}に乗る`);
-  else if (player.mode === 'ride' && cfg.mobility === 'both') hud.hint('W 前進 / S ブレーキ / A D 曲がる / F 降りる / V 視点');
+  const kmh = v ? Math.round(Math.abs(v.speed) * 3.6) : 0;
+  if (player.mode === 'walk' && v && cfg.mobility === 'both' && player.pos.distanceTo(v.pos) < 3.2) hud.hint(`F で${v.spec.name}に乗る`);
+  else if (player.mode === 'ride' && v?.spec.flight) {
+    const f = v.spec.flight;
+    if (player.cruise) hud.hint(`遊覧飛行中  ${kmh} km/h  高度 ${Math.round(v.pos.y)} m  ／ C 手動に戻す`);
+    else if (v.airborne) hud.hint(`飛行中  ${kmh} km/h  高度 ${Math.round(v.pos.y)} m\nW S 速度 / A D 旋回 / Space・E 上昇 / Q 下降 / 道路に降りると着陸 / C 遊覧`);
+    else if (v.speed >= f.takeoff) hud.hint(`${kmh} km/h — Space で離陸！`);
+    else hud.hint(`${kmh} km/h ／ W 前進 / S ブレーキ / A D 曲がる / Shift 加速（${Math.round(f.takeoff * 3.6)} km/h で離陸可）/ C 遊覧飛行 / F 降りる / V 視点`);
+  } else if (player.mode === 'ride' && cfg.mobility === 'both') hud.hint('W 前進 / S ブレーキ / A D 曲がる / F 降りる / V 視点');
   else hud.hint('');
 }
 
@@ -269,6 +301,44 @@ function grab(w = 1600, h = 900, o: ShotOpts = {}) {
 const api = {
   scene, camera, rig, renderer, pipeline, world, player, tod, sky, sun, fill, hemi, xr, THREE,
   bakeStats,
+  /** Take off from the runway and fly the sightseeing loop; returns height reached, loop coverage, hits. */
+  autoFly(seconds = 150) {
+    if (!player.vehicle?.spec.flight) return null;
+    player.mode = 'ride';
+    player.reset();
+    player.airHits = 0;
+    player.stuckTime = 0;
+    player.cruise = true;
+    const seen = new Set<number>();
+    let maxY = 0, takeoffAt = -1;
+    for (let t = 0; t < seconds; t += 1 / 60) {
+      step(1 / 60);
+      const v = player.vehicle;
+      maxY = Math.max(maxY, v.pos.y);
+      if (v.airborne && takeoffAt < 0) takeoffAt = t;
+      if (v.pos.y > 30) seen.add(Math.floor(cruiseNearest(v.pos).u * 20));
+    }
+    player.cruise = false;
+    const v = player.vehicle;
+    return { takeoffAt: +takeoffAt.toFixed(1), maxY: +maxY.toFixed(1), loopCoverage: seen.size / 20, airHits: player.airHits, stuckSeconds: +player.stuckTime.toFixed(2), final: [Math.round(v.pos.x), Math.round(v.pos.y), Math.round(v.pos.z)] };
+  },
+  /** Fly the loop, then descend onto the runway by hand-coded inputs and check it lands. */
+  autoLand() {
+    const v = player.vehicle;
+    if (!v?.spec.flight) return null;
+    player.mode = 'ride';
+    player.reset();
+    // spawn airborne over the runway heading west, 20 m up
+    v.pos.set(-60, 20, 0); v.yaw = Math.PI / 2; v.airborne = true; v.speed = 15; v.vy = 0;
+    player.xrInput = { throttle: -1, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0, lift: -0.6 };
+    let t = 0;
+    for (; t < 20 && v.airborne; t += 1 / 60) step(1 / 60);
+    const landed = !v.airborne;
+    player.xrInput = { throttle: -1, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0, lift: 0 };
+    for (let k = 0; k < 6 * 60; k++) step(1 / 60);
+    player.xrInput = null;
+    return { landed, after: +t.toFixed(1), stoppedSpeed: +v.speed.toFixed(2), at: [Math.round(v.pos.x), Math.round(v.pos.z)] };
+  },
   viewpoints: COURSE.viewpoints.map((v) => v.name),
   keyTimes: KEY_TIMES,
   grab,
@@ -292,7 +362,7 @@ const api = {
     player.autopilot = false;
     return { mode: player.mode, progress: +maxT.toFixed(3), stuckSeconds: +player.stuckTime.toFixed(2) };
   },
-  stats: () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures }),
+  stats: () => ({ calls: pipeline.sceneCalls, triangles: renderer.info.render.triangles, geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures }),
   /** Average ms per rendered frame at the current size (synchronous, forces a GPU sync each frame). */
   bench(frames = 120) {
     const gl = renderer.getContext();

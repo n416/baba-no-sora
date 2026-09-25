@@ -3,6 +3,8 @@ import type { World } from '../world/world';
 import type { WorldConfig } from '../config';
 import { Vehicle } from './vehicle';
 import { clamp } from '../core/util';
+import { COURSE } from '../world/course';
+import { cruiseTarget } from '../world/cruise';
 
 /**
  * The one thing that moves through the world: on foot, or on the vehicle.
@@ -18,9 +20,10 @@ export interface DriveInput {
   moveY: number; // on foot, -1..1 forward
   boost: boolean;
   turn: number; // on foot, yaw delta this frame (snap turn / mouse)
+  lift: number; // flying machines: -1 descend .. 1 climb (on the ground, > 0 at speed = take off)
 }
 
-const WALK = 1.5, RUN = 3.4, EYE = 1.58, RADIUS = 0.32, STEP = 0.4;
+const WALK = 1.5, RUN = 3.4, EYE = 1.58, RADIUS = 0.32, STEP = 0.4, BODY = 1.8, WALK_LIMIT = 200;
 
 export class Player {
   readonly world: World;
@@ -33,6 +36,10 @@ export class Player {
   pitch = 0;
   locked = false;
   autopilot = false;
+  /** Sightseeing flight: follows the cruise route (takes off first if on the ground). */
+  cruise = false;
+  /** Collisions while airborne, for the flight test. */
+  airHits = 0;
   readonly keys = new Set<string>();
   xrInput: DriveInput | null = null;
   /** Camera pose this frame (world), set by update(). */
@@ -60,7 +67,7 @@ export class Player {
   /** Back to the start of the course, facing along it. */
   reset() {
     const road = this.world.road;
-    const t = 0.07;
+    const t = COURSE.startT;
     road.pointAt(t, this.pos);
     this.yaw = road.yawAt(t);
     this.pitch = 0;
@@ -68,6 +75,9 @@ export class Player {
       this.vehicle.pos.copy(this.pos);
       this.vehicle.yaw = this.yaw;
       this.vehicle.speed = 0;
+      this.vehicle.airborne = false;
+      this.vehicle.vy = 0;
+      this.cruise = false;
       if (this.mode === 'walk') {
         // park it beside the start so it can be found
         const r = road.rightAt(t, new THREE.Vector3());
@@ -83,7 +93,7 @@ export class Player {
     const v = this.vehicle;
     if (!v || this.cfg.mobility !== 'both') return false;
     if (this.mode === 'ride') {
-      if (Math.abs(v.speed) > 1) return false;
+      if (Math.abs(v.speed) > 1 || v.airborne) return false;
       v.speed = 0;
       const right = new THREE.Vector3(Math.cos(v.yaw), 0, -Math.sin(v.yaw));
       this.pos.copy(v.pos).addScaledVector(right, -1.1);
@@ -110,7 +120,8 @@ export class Player {
     const k = this.keys;
     const f = (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0);
     const s = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
-    return { throttle: f, steer: s, moveX: s, moveY: f, boost: k.has('ShiftLeft') || k.has('ShiftRight'), turn: 0 };
+    const lift = (k.has('Space') || k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0);
+    return { throttle: f, steer: s, moveX: s, moveY: f, boost: k.has('ShiftLeft') || k.has('ShiftRight'), turn: 0, lift };
   }
 
   private autoInput(): DriveInput {
@@ -124,11 +135,32 @@ export class Player {
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;
     const steer = clamp(-d * 2.5, -1, 1);
-    return { throttle: n.t > 0.985 ? -1 : 0.7, steer, moveX: 0, moveY: n.t > 0.985 ? 0 : 1, boost: false, turn: this.mode === 'walk' ? d * 0.08 : 0 };
+    return { throttle: n.t > 0.985 ? -1 : 0.7, steer, moveX: 0, moveY: n.t > 0.985 ? 0 : 1, boost: false, turn: this.mode === 'walk' ? d * 0.08 : 0, lift: 0 };
+  }
+
+  /** Sightseeing autopilot: on the ground, run up the road and lift off; in the air, chase a point ahead on the route. */
+  private cruiseInput(): DriveInput {
+    const v = this.vehicle!, f = v.spec.flight!;
+    if (!v.airborne) {
+      const road = this.autoInput();
+      return { ...road, throttle: 1, boost: true, lift: v.speed > f.takeoff + 0.5 ? 1 : 0 };
+    }
+    const target = cruiseTarget(v.pos, 70);
+    const want = Math.atan2(-(target.x - v.pos.x), -(target.z - v.pos.z));
+    let d = want - v.yaw;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    // climb out over the rooftops before turning onto the route
+    const high = v.pos.y > 28;
+    const steer = high ? clamp(-d * 1.6, -1, 1) : 0;
+    const lift = high ? clamp((target.y - v.pos.y) / 12, -1, 1) : 1;
+    const cruiseSpeed = 18;
+    return { throttle: clamp((cruiseSpeed - v.speed) * 0.6, -1, 1), steer, moveX: 0, moveY: 0, boost: false, turn: 0, lift };
   }
 
   update(dt: number) {
-    const input = this.autopilot ? this.autoInput() : this.xrInput ?? this.keyInput();
+    const flying = this.mode === 'ride' && this.vehicle?.spec.flight;
+    const input = this.cruise && flying ? this.cruiseInput() : this.autopilot ? this.autoInput() : this.xrInput ?? this.keyInput();
     const before = (this.mode === 'ride' && this.vehicle ? this.vehicle.pos : this.pos).clone();
     if (this.mode === 'ride' && this.vehicle) this.updateRide(dt, input);
     else this.updateWalk(dt, input);
@@ -146,73 +178,165 @@ export class Player {
     let mx = fx * input.moveY + rx * input.moveX, mz = fz * input.moveY + rz * input.moveX;
     const l = Math.hypot(mx, mz);
     if (l > 1) { mx /= l; mz /= l; }
-    this.move(this.pos, mx * sp * dt, mz * sp * dt, RADIUS);
+    this.move(this.pos, mx * sp * dt, mz * sp * dt, RADIUS, this.pos.y + STEP, this.pos.y + BODY);
     // keep within reach of the road so nobody walks off the world
     const n = this.world.road.nearest(this.pos.x, this.pos.z);
-    if (n.dist > 70) {
+    if (n.dist > WALK_LIMIT) {
       const p = this.world.road.pointAt(n.t);
-      this.pos.x = p.x + (this.pos.x - p.x) * (70 / n.dist);
-      this.pos.z = p.z + (this.pos.z - p.z) * (70 / n.dist);
+      this.pos.x = p.x + (this.pos.x - p.x) * (WALK_LIMIT / n.dist);
+      this.pos.z = p.z + (this.pos.z - p.z) * (WALK_LIMIT / n.dist);
     }
     const target = this.world.heightAt(this.pos.x, this.pos.z, this.pos.y);
     this.pos.y += (target - this.pos.y) * Math.min(1, dt * 14);
     this.eye.set(this.pos.x, this.pos.y + EYE, this.pos.z);
     this.eyeYaw = this.yaw;
     this.eyePitch = this.pitch;
-    if (this.vehicle) this.vehicle.pose(dt, this.world.heightAt(this.vehicle.pos.x, this.vehicle.pos.z));
+    if (this.vehicle) {
+      this.vehicle.showHulls(true);
+      this.vehicle.pose(dt, this.world.heightAt(this.vehicle.pos.x, this.vehicle.pos.z));
+    }
   }
 
   private updateRide(dt: number, input: DriveInput) {
     const v = this.vehicle!;
     const oldYaw = v.yaw;
-    v.drive(dt, input.throttle, input.steer, input.boost);
-    // drive() already moved it; undo and re-apply through the collider solver
-    const px = -Math.sin(v.yaw) * v.speed * dt, pz = -Math.cos(v.yaw) * v.speed * dt;
-    v.pos.x -= px; v.pos.z -= pz;
-    const hit = this.move(v.pos, px, pz, v.spec.radius);
-    if (hit) v.speed *= 0.3; // bump and stop, no crash physics
-    // soft guide rails: the road plus its shoulders
-    const road = this.world.road;
-    const n = road.nearest(v.pos.x, v.pos.z);
-    const limit = road.width / 2 + road.shoulder + 0.4;
-    if (Math.abs(n.lateral) > limit) {
-      const r = road.rightAt(n.t, _r);
-      const push = (Math.abs(n.lateral) - limit) * Math.sign(n.lateral);
-      v.pos.addScaledVector(r, -push * Math.min(1, dt * 8));
-      v.speed *= 1 - Math.min(1, dt * 1.5);
-    }
+    if (v.airborne) this.updateFlight(dt, input);
+    else this.updateGround(dt, input);
     const gy = this.world.heightAt(v.pos.x, v.pos.z);
     v.pose(dt, gy);
     this.pos.set(v.pos.x, gy, v.pos.z);
     // the rider's head turns with the machine; mouse look is an offset on top
     this.yaw += v.yaw - oldYaw;
+    const baseY = v.pos.y;
+    v.showHulls(this.view !== 'first');
 
     if (this.view === 'first') {
       const back = v.spec.seatBack;
-      this.eye.set(v.pos.x + Math.sin(v.yaw) * back, gy + v.spec.eyeHeight, v.pos.z + Math.cos(v.yaw) * back);
+      this.eye.set(v.pos.x + Math.sin(v.yaw) * back, baseY + v.spec.eyeHeight, v.pos.z + Math.cos(v.yaw) * back);
       this.eyeYaw = this.yaw;
       this.eyePitch = this.pitch;
     } else {
       const c = v.spec.chase;
-      const want = _w.set(v.pos.x + Math.sin(this.yaw) * c.dist, gy + c.height, v.pos.z + Math.cos(this.yaw) * c.dist);
+      const want = _w.set(v.pos.x + Math.sin(this.yaw) * c.dist, baseY + c.height, v.pos.z + Math.cos(this.yaw) * c.dist);
       if (!this.chaseInit) { this.chase.copy(want); this.chaseInit = true; }
       this.chase.lerp(want, Math.min(1, dt * 4));
+      // never let the chase camera sink into the road when coming in to land
+      this.chase.y = Math.max(this.chase.y, gy + 1.2);
       this.eye.copy(this.chase);
-      const look = _l.set(v.pos.x - Math.sin(v.yaw) * 3, gy + 1.1, v.pos.z - Math.cos(v.yaw) * 3);
+      const look = _l.set(v.pos.x - Math.sin(v.yaw) * 3, baseY + 1.1, v.pos.z - Math.cos(v.yaw) * 3);
       this.eyeYaw = Math.atan2(-(look.x - this.eye.x), -(look.z - this.eye.z));
       this.eyePitch = Math.atan2(look.y - this.eye.y, Math.hypot(look.x - this.eye.x, look.z - this.eye.z)) + this.pitch * 0.5;
     }
   }
 
+  private updateGround(dt: number, input: DriveInput) {
+    const v = this.vehicle!;
+    v.drive(dt, input.throttle, input.steer, input.boost);
+    // drive() already moved it; undo and re-apply through the collider solver
+    const px = -Math.sin(v.yaw) * v.speed * dt, pz = -Math.cos(v.yaw) * v.speed * dt;
+    v.pos.x -= px; v.pos.z -= pz;
+    const gy = this.world.heightAt(v.pos.x, v.pos.z);
+    const hit = this.move(v.pos, px, pz, v.spec.radius, gy + STEP, gy + 1.6);
+    if (hit) v.speed *= 0.3; // bump and stop, no crash physics
+    // soft guide rails: the road plus its sidewalks.  Far off the road (after landing
+    // somewhere else) there is no rail to snap back to, so only nudge when close.
+    const road = this.world.road;
+    const n = road.nearest(v.pos.x, v.pos.z);
+    const limit = road.width / 2 + road.shoulder + 0.4;
+    if (Math.abs(n.lateral) > limit && Math.abs(n.lateral) < limit + 8) {
+      const r = road.rightAt(n.t, _r);
+      const push = (Math.abs(n.lateral) - limit) * Math.sign(n.lateral);
+      v.pos.addScaledVector(r, -push * Math.min(1, dt * 8));
+      v.speed *= 1 - Math.min(1, dt * 1.5);
+    }
+    // take off: fast enough and pulling up
+    const f = v.spec.flight;
+    if (f && v.speed >= f.takeoff && input.lift > 0) {
+      v.airborne = true;
+      v.vy = 2.5;
+      v.pos.y = gy + 0.05;
+    }
+  }
+
+  private updateFlight(dt: number, input: DriveInput) {
+    const v = this.vehicle!, f = v.spec.flight!;
+    const top = f.maxAir * (input.boost ? f.airBoost : 1);
+    // airspeed never drops below the stall speed: it is a plane in the air
+    if (input.throttle > 0) v.speed += v.spec.accel * input.throttle * dt;
+    else if (input.throttle < 0) v.speed += v.spec.accel * 0.8 * input.throttle * dt;
+    if (v.speed > top) v.speed = Math.max(top, v.speed - v.spec.brake * 0.5 * dt);
+    v.speed = Math.max(f.minAir, v.speed);
+    // turning: bank-and-turn, gentle so VR stays comfortable
+    let steer = input.steer;
+    const half = COURSE.flightHalf;
+    const out = Math.max(Math.abs(v.pos.x) - half, Math.abs(v.pos.z) - half);
+    if (out > 0) {
+      // soft wall: steer home, harder the further out
+      const want = Math.atan2(v.pos.x, v.pos.z); // yaw that points at the origin
+      let d = want - v.yaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      const k = Math.min(1, out / 40);
+      steer = clamp(steer * (1 - k) - d * k * 2, -1, 1);
+    }
+    v.steerInput += (steer - v.steerInput) * Math.min(1, dt * 3);
+    v.yaw -= v.steerInput * f.turn * dt;
+    // climb / descend toward the stick
+    const vyWant = input.lift * f.climb;
+    v.vy += (vyWant - v.vy) * Math.min(1, dt * 2.2);
+    const prevY = v.pos.y;
+    v.pos.y += v.vy * dt;
+    if (v.pos.y > COURSE.flightCeiling) { v.pos.y = COURSE.flightCeiling; v.vy = Math.min(v.vy, 0); }
+    // horizontal move through the colliders the hull overlaps vertically
+    const px = -Math.sin(v.yaw) * v.speed * dt, pz = -Math.cos(v.yaw) * v.speed * dt;
+    const { floor, ceil, onRoad } = this.airSpan(v.pos.x + px, v.pos.z + pz, prevY);
+    if (v.pos.y + HULL > ceil) { v.pos.y = ceil - HULL; v.vy = Math.min(v.vy, 0); }
+    if (v.pos.y < floor) { v.pos.y = floor; v.vy = Math.max(v.vy, 0); }
+    if (this.move(v.pos, px, pz, v.spec.radius, v.pos.y + 0.05, v.pos.y + HULL)) {
+      this.airHits++;
+      v.speed = Math.max(f.minAir, v.speed * 0.85);
+    }
+    // touch down: back on the road surface, sinking or level
+    const gy = this.world.heightAt(v.pos.x, v.pos.z);
+    if (onRoad && v.pos.y <= gy + 0.06 && v.vy <= 0.5) {
+      v.airborne = false;
+      v.vy = 0;
+      v.pos.y = gy;
+      v.speed = Math.min(v.speed, v.spec.maxSpeed * v.spec.boost);
+      this.cruise = false;
+    }
+  }
+
+  /**
+   * What the hull may occupy vertically at (x, z) given where it was: roofs it was
+   * above are a floor, bridge decks it was under are a ceiling.  Off the road the
+   * floor stays a little above the ground, so it can only land on the road.
+   */
+  private airSpan(x: number, z: number, prevY: number) {
+    const v = this.vehicle!;
+    const r = v.spec.radius;
+    const road = this.world.road;
+    const n = road.nearest(x, z);
+    const onRoad = Math.abs(n.lateral) < road.width / 2 + road.shoulder;
+    let floor = this.world.heightAt(x, z) + (onRoad ? 0 : 1.5);
+    let ceil = Infinity;
+    for (const c of this.world.colliders) {
+      if (x < c.x0 - r || x > c.x1 + r || z < c.z0 - r || z > c.z1 + r) continue;
+      if (prevY >= c.top - 0.05) floor = Math.max(floor, c.top);
+      else if (c.bottom !== undefined && prevY + HULL <= c.bottom + 0.05) ceil = Math.min(ceil, c.bottom);
+    }
+    return { floor, ceil, onRoad };
+  }
+
   /** Circle vs AABB push-out.  Returns true if anything was hit. */
-  private move(p: THREE.Vector3, mx: number, mz: number, radius: number) {
+  private move(p: THREE.Vector3, mx: number, mz: number, radius: number, y0: number, y1: number) {
     let hit = false;
     const steps = Math.max(1, Math.ceil(Math.hypot(mx, mz) / 0.1)); // no tunnelling at speed
     for (let s = 0; s < steps; s++) {
       p.x += mx / steps;
       p.z += mz / steps;
       for (const c of this.world.colliders) {
-        if (c.top <= p.y + STEP) continue;
+        if (c.top <= y0 || (c.bottom !== undefined && c.bottom >= y1)) continue;
         const cx = clamp(p.x, c.x0, c.x1), cz = clamp(p.z, c.z0, c.z1);
         const dx = p.x - cx, dz = p.z - cz;
         const d2 = dx * dx + dz * dz;
@@ -244,3 +368,5 @@ export class Player {
 }
 
 const _r = new THREE.Vector3(), _w = new THREE.Vector3(), _l = new THREE.Vector3();
+/** Height of the flying car's hull above its origin, for vertical overlap. */
+const HULL = 1.5;

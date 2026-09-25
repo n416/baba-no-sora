@@ -24,6 +24,10 @@ try {
     const out = {};
     if (s.player.vehicle) out.ride = s.autoRun(240, 'ride');
     out.walk = s.autoRun(90, 'walk');
+    if (s.player.vehicle?.spec.flight) {
+      out.fly = s.autoFly(150);
+      out.land = s.autoLand();
+    }
     return out;
   });
   const checks = [];
@@ -32,6 +36,12 @@ try {
     checks.push(['ride stuck < 2 s', result.ride.stuckSeconds < 2]);
   }
   checks.push(['walk stuck < 2 s', result.walk.stuckSeconds < 2]);
+  if (result.fly) {
+    checks.push(['takes off within 10 s', result.fly.takeoffAt >= 0 && result.fly.takeoffAt < 10]);
+    checks.push(['sightseeing loop fully covered', result.fly.loopCoverage >= 0.95]);
+    checks.push(['no collisions in the air', result.fly.airHits === 0]);
+    checks.push(['lands on the runway', result.land.landed]);
+  }
   checks.push(['no console errors', errors.length === 0]);
   ok = checks.every(([, pass]) => pass);
   console.log(JSON.stringify({ result, checks: Object.fromEntries(checks), errors }, null, 2));

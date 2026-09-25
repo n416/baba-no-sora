@@ -15,8 +15,8 @@ export const shadowTint = { value: new THREE.Color('#8a86c8') };
 
 const RAMPS: Record<string, number[]> = {
   // values are the light level of each band, darkest first
-  hard: [0.32, 1.0],
-  cel: [0.3, 0.68, 1.0],
+  hard: [0.45, 1.0],
+  cel: [0.46, 0.76, 1.0],
   soft: [0.62, 0.86, 1.0], // pale masses that must stay light: blossom, snow, clouds
   four: [0.26, 0.5, 0.78, 1.0],
 };
@@ -98,9 +98,10 @@ export function flat(color: THREE.ColorRepresentation, o: { fog?: boolean; trans
  * The time of day sets one shared intensity on all of them.
  */
 const glowMaterials: THREE.MeshToonMaterial[] = [];
-export function glow(base: THREE.ColorRepresentation, light: THREE.ColorRepresentation, o: CelOptions = {}) {
+export function glow(base: THREE.ColorRepresentation, light: THREE.ColorRepresentation, o: CelOptions & { emissiveMap?: THREE.Texture } = {}) {
   const m = cel(base, o);
   m.emissive = new THREE.Color(light);
+  if (o.emissiveMap) m.emissiveMap = o.emissiveMap;
   m.emissiveIntensity = 0;
   glowMaterials.push(m);
   return m;

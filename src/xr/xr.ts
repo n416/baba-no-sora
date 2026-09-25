@@ -15,9 +15,12 @@ import { clamp, JP_FONT } from '../core/util';
  *
  * Controls (xr-standard mapping):
  *   right trigger  throttle / walk forward     left trigger   brake
- *   right stick    steer (ride) / snap turn     left stick     walk
+ *   right stick    steer (ride) / snap turn     left stick     walk / climb-descend in the air
+ *   right stick up at take-off speed: pull up and fly
  *   A              get on / off                 B              recentre
- *   X              timelapse on / off           left grip + left stick up/down: scrub the clock
+ *   X tap          timelapse on / off           X hold         sightseeing flight on / off
+ *   left grip + left stick up/down: scrub the clock
+ * The wrist clock shows the altitude while flying.
  */
 export class XRSupport {
   readonly renderer: THREE.WebGLRenderer;
@@ -38,6 +41,8 @@ export class XRSupport {
   private wristLabel = '';
   private leftGrip: THREE.Group | null = null;
   private sessionListeners: ((on: boolean) => void)[] = [];
+  private cruiseListeners: (() => void)[] = [];
+  private xHeld = 0;
 
   constructor(renderer: THREE.WebGLRenderer, rig: THREE.Group, camera: THREE.PerspectiveCamera, player: Player, tod: TimeOfDay) {
     this.renderer = renderer;
@@ -112,6 +117,11 @@ export class XRSupport {
     return this.renderer.xr.isPresenting;
   }
 
+  /** X held for 0.8 s: sightseeing flight on/off (a tap stays the timelapse). */
+  onCruise(fn: () => void) {
+    this.cruiseListeners.push(fn);
+  }
+
   onSession(fn: (on: boolean) => void) {
     this.sessionListeners.push(fn);
   }
@@ -120,7 +130,7 @@ export class XRSupport {
   readInput() {
     if (!this.presenting) return;
     const session = this.renderer.xr.getSession();
-    const inp: DriveInput = { throttle: 0, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0 };
+    const inp: DriveInput = { throttle: 0, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0, lift: 0 };
     if (!session) return;
     let scrub = 0;
     for (const src of session.inputSources) {
@@ -133,7 +143,11 @@ export class XRSupport {
       if (src.handedness === 'right') {
         inp.throttle += trig;
         inp.moveY += trig;
-        if (this.player.mode === 'ride') inp.steer = Math.abs(sx) > 0.15 ? sx : 0;
+        if (this.player.mode === 'ride') {
+          inp.steer = Math.abs(sx) > 0.15 ? sx : 0;
+          // right stick up at speed = pull up (take off)
+          if (!this.player.vehicle?.airborne && sy < -0.6) inp.lift = 1;
+        }
         else if (Math.abs(sx) > 0.7 && this.snapReady) { inp.turn = -Math.sign(sx) * (Math.PI / 6); this.snapReady = false; }
         else if (Math.abs(sx) < 0.3) this.snapReady = true;
         if (this.edge('rA', a)) this.player.toggleMount();
@@ -145,7 +159,16 @@ export class XRSupport {
           inp.moveX = Math.abs(sx) > 0.15 ? sx : 0;
           inp.moveY += Math.abs(sy) > 0.15 ? -sy : 0;
         }
-        if (this.edge('lX', a)) this.tod.playing = !this.tod.playing;
+        // X: tap = timelapse, hold = sightseeing flight
+        if (a) {
+          this.xHeld += 1 / 72;
+          if (this.xHeld >= 0.8 && this.xHeld < 0.8 + 1 / 72) for (const fn of this.cruiseListeners) fn();
+        } else {
+          if (this.xHeld > 0 && this.xHeld < 0.5) this.tod.playing = !this.tod.playing;
+          this.xHeld = 0;
+        }
+        // flying: left stick up/down climbs and descends (no strafing in the air)
+        if (this.player.vehicle?.airborne) { inp.lift = Math.abs(sy) > 0.2 ? -sy : 0; inp.moveY = 0; inp.moveX = 0; }
       }
     }
     // walking is head-relative: turn the stick vector by the head's yaw on the rig
@@ -190,11 +213,13 @@ export class XRSupport {
     const v = this.player.vehicle;
     let s = 0;
     if (this.comfortVignette && this.player.mode === 'ride' && v) {
-      s = clamp(Math.abs(v.speed) / v.spec.maxSpeed, 0, 1) * 0.35 + Math.abs(v.steerInput) * Math.min(1, Math.abs(v.speed) / 2) * 0.5;
+      const top = v.airborne && v.spec.flight ? v.spec.flight.maxAir : v.spec.maxSpeed;
+      s = clamp(Math.abs(v.speed) / top, 0, 1) * 0.35 + Math.abs(v.steerInput) * Math.min(1, Math.abs(v.speed) / 2) * 0.5 + Math.min(0.3, Math.abs(v.vy) * 0.05);
     }
     this.vignetteU.uStrength.value += (clamp(s, 0, 0.75) - this.vignetteU.uStrength.value) * Math.min(1, dt * 6);
 
-    const label = `${this.tod.label()}${this.tod.playing ? ' ▶' : ''}`;
+    const flying = v?.airborne && this.player.mode === 'ride';
+    const label = flying ? `${this.tod.label()} ${Math.round(v!.pos.y)}m` : `${this.tod.label()}${this.tod.playing ? ' ▶' : ''}`;
     if (this.leftGrip && label !== this.wristLabel) {
       this.wristLabel = label;
       const g = this.wristCtx;
@@ -202,7 +227,7 @@ export class XRSupport {
       g.fillStyle = 'rgba(245,239,226,0.92)';
       g.beginPath(); g.roundRect(4, 4, 248, 120, 22); g.fill();
       g.fillStyle = '#2b2533';
-      g.font = `bold 64px ${JP_FONT}`;
+      g.font = `bold ${label.length > 7 ? 48 : 64}px ${JP_FONT}`;
       g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillText(label, 128, 66);
       this.wristTex.needsUpdate = true;

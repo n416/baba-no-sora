@@ -9,7 +9,35 @@ import type { Season } from '../config';
  * because the cel ramp and the grade both push toward contrast.
  */
 export const PAL = {
-  asphalt: '#8a8893',
+  // --- city ground ---
+  ground: '#aaa6a8',
+  groundAlt: '#9d9aa6',
+  sidewalk: '#dccbb0',
+  curb: '#c2beb8',
+  street: '#8e8e9c', // side streets (Waseda-dori itself is `asphalt`)
+  tileRed: '#b8826a', // alley paving
+  // --- buildings ---
+  facades: ['#ece6da', '#ddd5c6', '#c9cbd0', '#bfa88e', '#e6d3b6', '#a9b2bc', '#cf9a84', '#d8dcd6'] as readonly string[],
+  roofSlab: '#9a98a2',
+  roofKit: '#b9bcc2', // rooftop tanks, plant rooms
+  lattice: '#b4523e', // the red lattice building
+  hotel: '#f1f0ec',
+  glassBlue: '#8fb0cc',
+  steel: '#8c949c',
+  steelDark: '#5d646c',
+  hazardYellow: '#f0c43a',
+  hazardBlack: '#2a2a2e',
+  embankment: '#b5aea2',
+  awningRed: '#c0413a',
+  shutter: '#9a938a',
+  acUnit: '#e9e7e1',
+  cone: '#ee7a3a',
+  coneWhite: '#f4f1ea',
+  lampPole: '#6f757c',
+  trainSilver: '#d4d8dc',
+  trainGreen: '#63b35a',
+  trainYellow: '#f0c232',
+  asphalt: '#7f8192',
   asphaltEdge: '#a39a86',
   roadLine: '#f1eee4',
   dirt: '#b79e7a',
@@ -82,7 +110,7 @@ const SEASONS: Record<Season, SeasonPalette> = {
     grass: '#b8b56a',
     grassDry: '#d2b56e',
     field: '#d9b85c', // ripe rice
-    canopy: ['#e6a24a', '#c9673d', '#8f5a3c'],
+    canopy: ['#f2c64c', '#dc9a3a', '#a9683c'], // ginkgo and zelkova along Tokyo streets
     hill: '#b08a5a',
     particles: 'leaves',
     particleColor: '#e0843e',

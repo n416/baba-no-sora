@@ -141,6 +141,15 @@ export function makePole() {
   g.add(box(0.32, 1.8, 0.32, M(PAL.poleStripe, 'soft'), 0, 0.3, 0));
   for (let i = 0; i < 4; i++) g.add(box(0.29, 0.22, 0.33, M('#2d2a2a'), 0, 0.5 + i * 0.44, 0));
   g.add(box(0.5, 0.7, 0.4, M('#8e8e8a'), 0, 6.4, 0.25)); // transformer
+  // insulators on the crossarm, a second (comms) arm, step bolts up the shaft
+  for (const x of [-0.9, -0.3, 0.3, 0.9]) {
+    const ins = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.16, 6), M('#e8e6e0', 'soft'));
+    ins.position.set(x, 7.75, 0);
+    g.add(ins);
+  }
+  g.add(box(1.4, 0.1, 0.1, M(PAL.woodDark), 0, 6.9, 0));
+  for (let y = 2.2; y < 7.2; y += 0.45) g.add(box(0.36, 0.03, 0.03, M('#5a5a5e'), 0, y, 0).rotateY((y * 7) % 2 ? 0 : Math.PI / 2));
+  g.add(box(0.3, 0.7, 0.03, M('#f4f1e8', 'soft'), 0, 2.4, 0.16)); // wrapped ad plate
   return shadows(g, true, false);
 }
 
