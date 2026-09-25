@@ -45,6 +45,15 @@ const SLASH_REACH = 40; // the kaiju's body radius (~21 m) + blade (13 m) + arm
 const SLASH_DAMAGE = [6, 6, 7, 15];
 /** How the kaiju reels: impulse per hit kind. */
 const RECOIL = { beam: 0.28, slash: 0.6, finisher: 1.15 };
+/** The robot's body radius against the kaiju (m). */
+const ROBOT_R = 4.5;
+/** Most the robot is shoved out of the kaiju in one frame (m). */
+const MAX_PUSH = 1.5;
+/** Kaiju head and tail as spheres: local x, y, z, radius (before its scale S). */
+const KAIJU_BLOBS: [number, number, number, number][] = [
+  [0, 24, -6, 4.5], // head
+  [0, 9, 7, 3.6], [0, 7.8, 10.6, 3.1], [0, 6.6, 14.2, 2.6], [0, 5.4, 17.8, 2.1], [0, 4.2, 21.4, 1.6], // tail
+];
 /** 1/s: a knock of `k` metres is a slide starting at k * KNOCK_DECAY m/s. */
 const KNOCK_DECAY = 3.5;
 
@@ -228,6 +237,7 @@ export class RobotGame {
     this.updateBolts(dt);
     this.updateOrbs(dt);
     this.updateMelee(dt);
+    this.blockRobot();
     this.fx.update(dt, camera);
     this.trail.update(dt);
     const k = this.kaiju;
@@ -358,6 +368,48 @@ export class RobotGame {
         sfx.saberHit(at, heavy);
       }
     }
+  }
+
+  /**
+   * The robot cannot walk, fly, lunge or be shoved into the kaiju: its body (a
+   * vertical capsule) is pushed out sideways from the kaiju's torso column and
+   * the spheres of its head and tail.
+   */
+  private blockRobot() {
+    const v = this.player.vehicle;
+    if (!v || !this.robotActive || !this.kaiju.root.visible || (this.phase !== 'rising' && this.phase !== 'fighting')) return;
+    const y0 = v.pos.y + 1.5, y1 = v.pos.y + (v.spec.robot?.height ?? 20) - 1.5;
+    const c = Math.cos(this.kYaw), sn = Math.sin(this.kYaw);
+    let moved = false;
+    const pushFrom = (lx: number, ly: number, lz: number, r: number, column: boolean) => {
+      // kaiju-local (unscaled) -> world
+      const x = this.kPos.x + (lx * c + lz * sn) * S, z = this.kPos.z + (-lx * sn + lz * c) * S, y = this.kPos.y + ly * S;
+      const reach = r * S + ROBOT_R;
+      let dx = v.pos.x - x, dz = v.pos.z - z;
+      let need: number;
+      if (column) {
+        if (y1 < this.kPos.y || y0 > y) return; // entirely above or below the torso
+        need = reach;
+      } else {
+        const dy = y - Math.max(y0, Math.min(y1, y)); // from the nearest point of the robot's spine
+        if (Math.abs(dy) >= reach) return;
+        need = Math.sqrt(reach * reach - dy * dy);
+      }
+      let h = Math.hypot(dx, dz);
+      if (h >= need) return;
+      if (h < 0.01) { dx = v.pos.x - this.kPos.x; dz = v.pos.z - this.kPos.z; h = Math.hypot(dx, dz) || 1; if (h < 0.01) { dx = 1; h = 1; } }
+      // out to the surface -- a deep overlap (dropping onto it from above) slides off over a few frames
+      const out = Math.min(need - h, MAX_PUSH);
+      v.pos.x += (dx / h) * out;
+      v.pos.z += (dz / h) * out;
+      // stop pressing on in: drop the part of the shove that points into it
+      const into = -(v.push.x * dx + v.push.z * dz) / h;
+      if (into > 0) { v.push.x += (dx / h) * into; v.push.z += (dz / h) * into; }
+      moved = true;
+    };
+    pushFrom(0, 28, 0, 8, true); // the torso, ground to shoulders
+    for (const b of KAIJU_BLOBS) pushFrom(b[0], b[1], b[2], b[3], false);
+    if (moved) v.parts.root.position.set(v.pos.x, v.pos.y, v.pos.z);
   }
 
   /** Damage + recoil + stagger.  `impulse` sets how far it reels, `knock` metres it is shoved back. */
