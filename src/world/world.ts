@@ -7,7 +7,24 @@ import type { WorldConfig } from '../config';
 import { rng } from '../core/util';
 
 /** An XZ box from `bottom` (default: the ground) up to `top`.  A bottom lets things pass under (the rail bridge). */
-export interface Collider { x0: number; z0: number; x1: number; z1: number; top: number; bottom?: number }
+export interface Collider { x0: number; z0: number; x1: number; z1: number; top: number; bottom?: number; bid?: number; off?: boolean }
+
+/**
+ * A building that can be knocked down.  Its meshes are baked with everything
+ * else; `ranges` remembers where its vertices ended up in each merged mesh, so
+ * collapsing it is a vertex-range rewrite, not a new draw call.
+ */
+export interface Destructible {
+  id: number;
+  box: THREE.Box3;
+  hp: number;
+  maxHp: number;
+  state: 'standing' | 'falling' | 'down';
+  t: number;
+  colour: THREE.Color;
+  ranges: { attr: THREE.BufferAttribute; start: number; count: number; orig: Float32Array }[];
+  colliders: Collider[];
+}
 export interface Platform { x0: number; z0: number; x1: number; z1: number; y: number }
 
 /**
@@ -66,6 +83,7 @@ export class World {
   readonly colliders: Collider[] = [];
   readonly platforms: Platform[] = [];
   readonly road = new Road();
+  readonly destructibles: Destructible[] = [];
   readonly pal: SeasonPalette;
   readonly cfg: WorldConfig;
   private updaters: ((dt: number, time: number) => void)[] = [];
@@ -118,7 +136,24 @@ export class World {
     collideObject: (o: THREE.Object3D, pad = 0) => {
       o.updateWorldMatrix(true, true);
       const b = new THREE.Box3().setFromObject(o);
-      this.colliders.push({ x0: b.min.x - pad, z0: b.min.z - pad, x1: b.max.x + pad, z1: b.max.z + pad, top: b.max.y });
+      const c: Collider = { x0: b.min.x - pad, z0: b.min.z - pad, x1: b.max.x + pad, z1: b.max.z + pad, top: b.max.y };
+      const bid = o.userData.bid as number | undefined;
+      if (bid) { c.bid = bid; this.destructibles[bid - 1].colliders.push(c); }
+      this.colliders.push(c);
+    },
+    /**
+     * Mark a (static) building as destructible.  Call before collideObject so the
+     * collider is linked.  Taller buildings take more beam hits.
+     */
+    destructible: (o: THREE.Object3D, colour: string = o.userData.wall ?? '#d8d2c8') => {
+      o.updateWorldMatrix(true, true);
+      const box = new THREE.Box3().setFromObject(o);
+      const h = box.max.y - box.min.y;
+      const hp = h < 14 ? 1 : h < 26 ? 2 : 3;
+      const d: Destructible = { id: this.destructibles.length + 1, box, hp, maxHp: hp, state: 'standing', t: 0, colour: new THREE.Color(colour), ranges: [], colliders: [] };
+      this.destructibles.push(d);
+      o.userData.bid = d.id;
+      return o;
     },
     /** Walkable box top.  Neighbouring platforms must OVERLAP, not meet, or feet fall through the seam. */
     platform: (x0: number, z0: number, x1: number, z1: number, y: number) => {
@@ -199,19 +234,23 @@ export class World {
    */
   bake() {
     this.staticGroup.updateMatrixWorld(true);
-    const buckets = new Map<string, { mat: THREE.Material; cast: boolean; recv: boolean; geos: THREE.BufferGeometry[] }>();
+    const buckets = new Map<string, { mat: THREE.Material; cast: boolean; recv: boolean; geos: THREE.BufferGeometry[]; bids: number[] }>();
     const drop: THREE.Object3D[] = [];
     this.staticGroup.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh || Array.isArray(m.material) || m.userData.noBake) return;
       const key = `${m.material.uuid}|${m.castShadow}|${m.receiveShadow}`;
       let b = buckets.get(key);
-      if (!b) buckets.set(key, (b = { mat: m.material, cast: m.castShadow, recv: m.receiveShadow, geos: [] }));
+      if (!b) buckets.set(key, (b = { mat: m.material, cast: m.castShadow, recv: m.receiveShadow, geos: [], bids: [] }));
       let geo = m.geometry.clone().applyMatrix4(m.matrixWorld);
       if (geo.index) geo = geo.toNonIndexed();
       for (const name of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(name)) geo.deleteAttribute(name);
       if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array((geo.attributes.position.count) * 2), 2));
       b.geos.push(geo);
+      // which destructible (if any) this mesh belongs to: the nearest tagged ancestor
+      let bid = 0;
+      for (let p: THREE.Object3D | null = m; p && !bid; p = p.parent) bid = (p.userData.bid as number) || 0;
+      b.bids.push(bid);
       drop.push(m);
     });
     for (const m of drop) m.removeFromParent();
@@ -224,7 +263,22 @@ export class World {
       mesh.receiveShadow = b.recv;
       this.staticGroup.add(mesh);
       n++;
+      // record vertex ranges per destructible (runs of the same bid merge into one range)
+      const pos = merged.attributes.position as THREE.BufferAttribute;
+      let at = 0;
+      b.geos.forEach((g, i) => {
+        const count = g.attributes.position.count;
+        const bid = b.bids[i];
+        if (bid) {
+          const d = this.destructibles[bid - 1];
+          const last = d.ranges[d.ranges.length - 1];
+          if (last && last.attr === pos && last.start + last.count === at) last.count += count;
+          else d.ranges.push({ attr: pos, start: at, count, orig: new Float32Array(0) });
+        }
+        at += count;
+      });
     }
-    return { meshesIn: drop.length, meshesOut: n };
+    for (const d of this.destructibles) for (const r of d.ranges) r.orig = (r.attr.array as Float32Array).slice(r.start * 3, (r.start + r.count) * 3);
+    return { meshesIn: drop.length, meshesOut: n, destructibles: this.destructibles.length };
   }
 }

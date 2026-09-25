@@ -27,6 +27,18 @@ export class Hud {
     document.title = cfg.title;
     document.getElementById('season')!.textContent = SEASON_JA[cfg.season];
     document.getElementById('subtitle')!.textContent = `${SEASON_JA[cfg.season]}・北緯${cfg.latitude}°`;
+    // the start card offers the other mode; a click on the link must not start pointer lock
+    const link = document.getElementById('mode-link') as HTMLAnchorElement | null;
+    if (link) {
+      const robot = cfg.vehicle === 'robot';
+      link.href = robot ? '?' : '?vehicle=robot';
+      link.textContent = robot ? '▶ 翼のある車に戻る' : '▶ 巨大ロボットで遊ぶ（ビーム・バーニア・怪獣）';
+      link.addEventListener('click', (e) => e.stopPropagation());
+      if (robot) {
+        const p = document.querySelector('#start p:nth-of-type(2)');
+        if (p) p.innerHTML = 'W S 前後 ／ A D 旋回 ／ マウス 照準 ／ <b>左クリック ビーム</b><br />Shift ダッシュ ／ <b>Space・E バーニア上昇</b> ／ Q 降下<br />建物を 6 棟壊すと怪獣が来る。倒すと街が元に戻る';
+      }
+    }
     this.slider.addEventListener('input', () => {
       tod.playing = false;
       tod.set(parseFloat(this.slider.value));
@@ -57,6 +69,21 @@ export class Hud {
   hint(text: string) {
     this.hintEl.textContent = text;
     this.hintEl.classList.toggle('hidden', !text);
+  }
+
+  /** Kaiju HP gauge: ratio 0..1, or null to hide. */
+  gauge(ratio: number | null) {
+    const el = document.getElementById('boss')!;
+    el.classList.toggle('hidden', ratio === null);
+    if (ratio === null) return;
+    (document.getElementById('boss-fill') as HTMLElement).style.width = `${Math.round(ratio * 100)}%`;
+    document.getElementById('boss-hp')!.textContent = String(Math.round(ratio * 100));
+  }
+
+  counter(text: string) {
+    const el = document.getElementById('counter')!;
+    el.textContent = text;
+    el.classList.toggle('hidden', !text);
   }
 
   toast(text: string) {

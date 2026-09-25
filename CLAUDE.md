@@ -44,7 +44,10 @@ src/
   player/player.ts     徒歩/地上走行/飛行、衝突（高さ付き）、ガイドレール、カメラ、autopilot、遊覧飛行
   player/vehicle.ts    乗り物の表 (VEHICLES、flight 付き) と builder。wingCar = 翼のある車
   xr/xr.ts             WebXR: 着座・水平固定・スナップターン・周辺減光・手首時計・コントローラー
-  ui/hud.ts            開始カード・時刻スライダー・ヒント・トースト
+  ui/hud.ts            開始カード・時刻スライダー・ヒント・トースト・怪獣の体力ゲージ・破壊カウンター
+  game/destruction.ts  建物の崩壊（bake 済みメッシュの頂点範囲を書き換える）、瓦礫と土煙（InstancedMesh 2 つ）、restoreAll()
+  game/kaiju.ts        怪獣のモデル（架空。脚・尻尾・顎がピボット、頭上の VR 用ゲージ）
+  game/game.ts         ロボットモードの進行: ビーム → 6 棟で怪獣出現 → 撃破 → 街とロボットを元に戻す
 scripts/shoot.mjs      Critic 用撮影 (Playwright)
 scripts/explore.mjs    回帰テスト (Playwright)
 scripts/sheet.mjs      critic 用コンタクトシート
@@ -64,6 +67,7 @@ docs/                  brief.md / survey.md / critic-iter-N.md をここに
   ```
 - 時間を進めるテストは手でステップ：`__scene.step(10)`（10 秒分）。
 - `__scene.autoRun(120, 'ride' | 'walk')` → `{ progress, stuckSeconds }`。
+- `__scene.robotRound()`（`?vehicle=robot` のページで）→ 6 棟壊して怪獣を呼び、倒し、復元されるまでを 1 ラウンド自動で回す。
 - `__scene.autoFly(150)` → 遊覧飛行で離陸〜周回 `{ takeoffAt, maxY, loopCoverage, airHits }`。`__scene.autoLand()` → 滑走路に降りられるか。
 - `__shot(name, w, h, {})`（vp も pos も無し）は今のプレイヤー視点。乗り物は `player.xrInput = {...}` で入力を与えて `step()` で動かす。
 - `__scene.bench()` → ms/frame, fps, draw calls。`__scene.stats()`。
@@ -85,6 +89,8 @@ docs/                  brief.md / survey.md / critic-iter-N.md をここに
 - **layout の各区画は自分の `rng(seed)` を持つ。** 共有すると、別の区画に小物を足しただけで家並みが入れ替わる。
 - 看板は `hSign()`（4:1）/ `vSign()`（1:4）でアトラスのセルを取り、`signPlane(w, h, rect)` で貼る。駅名など特別な看板は `markSpecial()`。
 - 動く物で部品が多いもの（車・電車・歩行者）は `ctx.addMoving()`（材質ごとに合成して draw call を減らす）。
+- 壊せる建物は `ctx.destructible(o)` を `ctx.add` / `collideObject` の**前に**呼ぶ（bake が頂点範囲を覚え、collider が紐づく）。
+  壊れた collider は `off`。衝突・床・カメラの判定はすべて `c.off` を飛ばすこと。
 - 高架（ガード）など下をくぐれる物は `ctx.collide(x0, z0, x1, z1, top, bottom)` の bottom を使う。飛行はそれを天井として扱う。
 
 ## 既知の罠
@@ -109,5 +115,9 @@ docs/                  brief.md / survey.md / critic-iter-N.md をここに
 | 動く物の向き：+z が前の部品を道に沿って走らせると逆向き | `rotation.y = yawAt(t)` で +z は**進行と逆**（東）を向く。西向きに走らせるなら `+ Math.PI` |
 | 太陽のグレアが grab() でずれる | 投影前にカメラの matrixWorldInverse を更新していなかった（post.ts で更新してから project） |
 | 撮影カメラが建物やバス停のガラスの中 | `__shot` の pos は衝突判定をしない。撮ったら最初に「何が写っているか」を見る。ray で最初の当たりを確かめると早い |
+
+| 壊した建物の影だけ残る／戻したら崩れたまま | bake 済みメッシュを消すなら、影にも効くよう**頂点そのもの**を書き換える（シェーダーで消すと影パスに残る）。戻すときは保存した元の頂点を書き戻す |
+| ロボットの肩越しカメラがビルに埋まる | カメラと頭を結ぶ線を collider で調べて手前に寄せる（`clearance()`） |
+| ロボットのコックピットで頭の部品が視界に入る | 機体が前傾すると頭が目の前に来る。一人称では `userData.head` の部品を隠す |
 
 ## 見つけた罠はここに追記していく

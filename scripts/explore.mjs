@@ -30,6 +30,13 @@ try {
     }
     return out;
   });
+  // robot mode on its own page: one scripted round (destroy -> kaiju -> defeat -> reset)
+  const robotPage = await browser.newPage({ viewport: { width: 960, height: 540 } });
+  robotPage.on('pageerror', (e) => errors.push(`robot pageerror: ${e.message}`));
+  robotPage.on('console', (m) => { if (m.type() === 'error') errors.push(`robot console: ${m.text()}`); });
+  await robotPage.goto(URL + (URL.includes('?') ? '&' : '?') + 'vehicle=robot', { waitUntil: 'load' });
+  await robotPage.waitForFunction(() => !!window.__scene, null, { timeout: 60000 });
+  result.robot = await robotPage.evaluate(() => window.__scene.robotRound());
   const checks = [];
   if (result.ride) {
     checks.push(['ride reaches the end (>= 0.97)', result.ride.progress >= 0.97]);
@@ -41,6 +48,11 @@ try {
     checks.push(['sightseeing loop fully covered', result.fly.loopCoverage >= 0.95]);
     checks.push(['no collisions in the air', result.fly.airHits === 0]);
     checks.push(['lands on the runway', result.land.landed]);
+  }
+  if (result.robot) {
+    checks.push(['robot: kaiju comes after 6 buildings', result.robot.downWhenSummoned >= 6 && result.robot.phaseAfterSummon === 'rising']);
+    checks.push(['robot: kaiju defeated by beams', result.robot.hpAfter === 0 && result.robot.wins === 1]);
+    checks.push(['robot: city and robot reset after the win', result.robot.phaseEnd === 'calm' && result.robot.standingAfterReset === result.robot.destructibles && result.robot.robotAtStart < 1]);
   }
   checks.push(['no console errors', errors.length === 0]);
   ok = checks.every(([, pass]) => pass);

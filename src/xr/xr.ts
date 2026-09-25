@@ -133,6 +133,7 @@ export class XRSupport {
     const inp: DriveInput = { throttle: 0, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0, lift: 0 };
     if (!session) return;
     let scrub = 0;
+    const robot = this.player.mode === 'ride' && !!this.player.vehicle?.spec.robot;
     for (const src of session.inputSources) {
       const gp = src.gamepad;
       if (!gp) continue;
@@ -150,7 +151,7 @@ export class XRSupport {
         }
         else if (Math.abs(sx) > 0.7 && this.snapReady) { inp.turn = -Math.sign(sx) * (Math.PI / 6); this.snapReady = false; }
         else if (Math.abs(sx) < 0.3) this.snapReady = true;
-        if (this.edge('rA', a)) this.player.toggleMount();
+        if (this.edge('rA', a) && !robot) this.player.toggleMount(); // on the robot, A is the verniers
         if (this.edge('rB', b)) this.needRecentre = true;
       } else if (src.handedness === 'left') {
         inp.throttle -= trig;
@@ -170,6 +171,26 @@ export class XRSupport {
         // flying: left stick up/down climbs and descends (no strafing in the air)
         if (this.player.vehicle?.airborne) { inp.lift = Math.abs(sy) > 0.2 ? -sy : 0; inp.moveY = 0; inp.moveX = 0; }
       }
+    }
+    // robot: right trigger fires, left stick drives, right stick turns, A = verniers, right grip = dash
+    if (robot) {
+      let fire = false, up = false, dash = false, fwd = 0, turn = 0, down = 0;
+      for (const src of session.inputSources) {
+        const gp = src.gamepad;
+        if (!gp) continue;
+        if (src.handedness === 'right') {
+          fire = (gp.buttons[0]?.value ?? 0) > 0.5;
+          dash = gp.buttons[1]?.pressed ?? false;
+          up = gp.buttons[4]?.pressed ?? false;
+          turn = Math.abs(gp.axes[2] ?? 0) > 0.15 ? gp.axes[2] : 0;
+        } else if (src.handedness === 'left') {
+          fwd = Math.abs(gp.axes[3] ?? 0) > 0.15 ? -(gp.axes[3] ?? 0) : 0;
+          down = gp.buttons[0]?.value ?? 0;
+        }
+      }
+      inp.throttle = fwd; inp.steer = turn; inp.boost = dash; inp.fire = fire;
+      inp.lift = up ? 1 : down > 0.5 ? -1 : 0;
+      inp.moveX = 0; inp.moveY = 0;
     }
     // walking is head-relative: turn the stick vector by the head's yaw on the rig
     if (this.player.mode === 'walk') {

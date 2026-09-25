@@ -21,6 +21,7 @@ export interface DriveInput {
   boost: boolean;
   turn: number; // on foot, yaw delta this frame (snap turn / mouse)
   lift: number; // flying machines: -1 descend .. 1 climb (on the ground, > 0 at speed = take off)
+  fire?: boolean; // robot: beam (VR trigger; the mouse button is read in main.ts)
 }
 
 const WALK = 1.5, RUN = 3.4, EYE = 1.58, RADIUS = 0.32, STEP = 0.4, BODY = 1.8, WALK_LIMIT = 200;
@@ -40,6 +41,8 @@ export class Player {
   cruise = false;
   /** Collisions while airborne, for the flight test. */
   airHits = 0;
+  /** Robot: called with a destructible's id when the robot rams or lands on it. */
+  onCrush: ((id: number) => void) | null = null;
   readonly keys = new Set<string>();
   xrInput: DriveInput | null = null;
   /** Camera pose this frame (world), set by update(). */
@@ -77,6 +80,8 @@ export class Player {
       this.vehicle.speed = 0;
       this.vehicle.airborne = false;
       this.vehicle.vy = 0;
+      this.vehicle.push.set(0, 0, 0);
+      this.vehicle.thrust = 0;
       this.cruise = false;
       if (this.mode === 'walk') {
         // park it beside the start so it can be found
@@ -93,15 +98,15 @@ export class Player {
     const v = this.vehicle;
     if (!v || this.cfg.mobility !== 'both') return false;
     if (this.mode === 'ride') {
-      if (Math.abs(v.speed) > 1 || v.airborne) return false;
+      if (Math.abs(v.speed) > 1 || v.airborne || (v.spec.robot && v.pos.y > 0.5)) return false;
       v.speed = 0;
       const right = new THREE.Vector3(Math.cos(v.yaw), 0, -Math.sin(v.yaw));
-      this.pos.copy(v.pos).addScaledVector(right, -1.1);
+      this.pos.copy(v.pos).addScaledVector(right, v.spec.robot ? -5 : -1.1);
       this.pos.y = this.world.heightAt(this.pos.x, this.pos.z);
       this.yaw = v.yaw;
       this.mode = 'walk';
     } else {
-      if (this.pos.distanceTo(v.pos) > 2.8) return false;
+      if (this.pos.distanceTo(v.pos) > (v.spec.robot ? 7 : 2.8)) return false;
       this.mode = 'ride';
       this.yaw = v.yaw;
       this.pitch = 0;
@@ -200,10 +205,11 @@ export class Player {
   private updateRide(dt: number, input: DriveInput) {
     const v = this.vehicle!;
     const oldYaw = v.yaw;
-    if (v.airborne) this.updateFlight(dt, input);
+    if (v.spec.robot) this.updateRobot(dt, input);
+    else if (v.airborne) this.updateFlight(dt, input);
     else this.updateGround(dt, input);
     const gy = this.world.heightAt(v.pos.x, v.pos.z);
-    v.pose(dt, gy);
+    v.pose(dt, v.spec.robot ? v.pos.y : gy); // the robot can stand on roofs
     this.pos.set(v.pos.x, gy, v.pos.z);
     // the rider's head turns with the machine; mouse look is an offset on top
     this.yaw += v.yaw - oldYaw;
@@ -215,6 +221,25 @@ export class Player {
       this.eye.set(v.pos.x + Math.sin(v.yaw) * back, baseY + v.spec.eyeHeight, v.pos.z + Math.cos(v.yaw) * back);
       this.eyeYaw = this.yaw;
       this.eyePitch = this.pitch;
+    } else if (v.spec.robot) {
+      // over the right shoulder; the view (and the beam) goes where the mouse points
+      const c = v.spec.chase;
+      const side = c.side ?? 0;
+      const want = _w.set(
+        v.pos.x + Math.sin(this.yaw) * c.dist + Math.cos(this.yaw) * side,
+        baseY + c.height,
+        v.pos.z + Math.cos(this.yaw) * c.dist - Math.sin(this.yaw) * side,
+      );
+      // keep the camera out of buildings: pull it in along the line from the robot's head
+      const head = _l.set(v.pos.x, baseY + 17, v.pos.z);
+      const k = this.clearance(head, want);
+      want.lerpVectors(head, want, k);
+      if (!this.chaseInit) { this.chase.copy(want); this.chaseInit = true; }
+      this.chase.lerp(want, Math.min(1, dt * (k < 1 ? 12 : 5)));
+      this.chase.y = Math.max(this.chase.y, gy + 2);
+      this.eye.copy(this.chase);
+      this.eyeYaw = this.yaw;
+      this.eyePitch = this.pitch - 0.12;
     } else {
       const c = v.spec.chase;
       const want = _w.set(v.pos.x + Math.sin(this.yaw) * c.dist, baseY + c.height, v.pos.z + Math.cos(this.yaw) * c.dist);
@@ -227,6 +252,124 @@ export class Player {
       this.eyeYaw = Math.atan2(-(look.x - this.eye.x), -(look.z - this.eye.z));
       this.eyePitch = Math.atan2(look.y - this.eye.y, Math.hypot(look.x - this.eye.x, look.z - this.eye.z)) + this.pitch * 0.5;
     }
+  }
+
+  /** Fraction (0..1) of the segment a->b that is clear of standing buildings, minus a margin. */
+  private clearance(a: THREE.Vector3, b: THREE.Vector3) {
+    let tMin = 1;
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    for (const c of this.world.colliders) {
+      if (c.off || c.top < Math.min(a.y, b.y) - 1) continue;
+      // slab test against the collider's box (ground to top, or bottom to top)
+      let t0 = 0, t1 = 1;
+      const bx = [c.x0 - 1.5, c.x1 + 1.5], by = [c.bottom ?? -1, c.top + 1.5], bz = [c.z0 - 1.5, c.z1 + 1.5];
+      const axes: [number, number, number[]][] = [[a.x, dx, bx], [a.y, dy, by], [a.z, dz, bz]];
+      let miss = false;
+      for (const [o, d, [lo, hi]] of axes) {
+        if (Math.abs(d) < 1e-6) { if (o < lo || o > hi) { miss = true; break; } continue; }
+        let ta = (lo - o) / d, tb = (hi - o) / d;
+        if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+        if (t0 > t1) { miss = true; break; }
+      }
+      if (!miss && t0 < tMin) tMin = t0;
+    }
+    return Math.max(0.12, tMin * 0.92);
+  }
+
+  /** A shove (the kaiju's plasma).  Robot only; gentle enough to stay comfortable in VR. */
+  knockback(x: number, y: number, z: number) {
+    const v = this.vehicle;
+    if (!v?.spec.robot) return;
+    v.push.set(x, 0, z);
+    v.vy = Math.max(v.vy, y);
+    v.airborne = true;
+  }
+
+  /**
+   * The giant robot: walks anywhere (no guide rails), steps over anything below
+   * its knee, flies on its verniers (Space/E up, Q down, gravity otherwise),
+   * lands on roofs, and flattens a small building it walks into -- or any
+   * building it rams at dash or flying speed.
+   */
+  private updateRobot(dt: number, input: DriveInput) {
+    const v = this.vehicle!, R = v.spec.robot!;
+    // turning: tank-style, and the camera turns with it (mouse look is on top)
+    v.steerInput += (input.steer - v.steerInput) * Math.min(1, dt * 6);
+    v.yaw -= v.steerInput * R.turn * dt;
+    const top = v.airborne ? R.air : input.boost ? R.dash : R.walk;
+    const target = input.throttle * top;
+    const acc = (v.airborne ? 10 : v.spec.accel) * dt;
+    v.speed += Math.max(-acc, Math.min(acc, target - v.speed));
+    // verniers
+    v.thrust += ((input.lift > 0 ? 1 : input.boost && input.throttle > 0 && v.airborne ? 0.5 : 0) - v.thrust) * Math.min(1, dt * 6);
+    if (input.lift > 0) v.vy = Math.min(14, v.vy + R.thrust * dt);
+    else if (input.lift < 0) v.vy = Math.max(-22, v.vy - 30 * dt);
+    else if (v.airborne) v.vy = Math.max(-20, v.vy - (v.thrust > 0.1 ? 4 : 14) * dt); // falls, softly while jets idle
+    // knock-back decays
+    v.pos.x += v.push.x * dt;
+    v.pos.z += v.push.z * dt;
+    v.push.multiplyScalar(Math.pow(0.15, dt));
+    const prevY = v.pos.y;
+    v.pos.y += v.vy * dt;
+    if (v.pos.y > COURSE.flightCeiling) { v.pos.y = COURSE.flightCeiling; v.vy = Math.min(0, v.vy); }
+    // soft wall at the edge of town
+    const half = COURSE.flightHalf;
+    v.pos.x = clamp(v.pos.x, -half - 30, half + 30);
+    v.pos.z = clamp(v.pos.z, -half - 30, half + 30);
+    // horizontal move against what it cannot step over
+    const px = -Math.sin(v.yaw) * v.speed * dt, pz = -Math.cos(v.yaw) * v.speed * dt;
+    const hits = this.robotMove(v.pos, px, pz, v.spec.radius, v.pos.y, v.pos.y + R.height, R.step);
+    const fast = Math.abs(v.speed) > R.walk * 1.3 || v.airborne;
+    for (const c of hits) {
+      if (!c.bid) continue;
+      if (fast || c.top - v.pos.y < 14) this.onCrush?.(c.bid);
+    }
+    if (hits.length && !fast) v.speed *= 0.6;
+    // floor: ground, or a roof we were above
+    let floor = this.world.heightAt(v.pos.x, v.pos.z);
+    const r = v.spec.radius * 0.6;
+    for (const c of this.world.colliders) {
+      if (c.off || v.pos.x < c.x0 - r || v.pos.x > c.x1 + r || v.pos.z < c.z0 - r || v.pos.z > c.z1 + r) continue;
+      if (prevY >= c.top - 0.3) floor = Math.max(floor, c.top);
+    }
+    if (v.pos.y <= floor) {
+      // a hard landing on a building flattens it
+      if (v.vy < -12) for (const c of this.world.colliders) if (c.bid && !c.off && Math.abs(c.top - floor) < 0.5 && v.pos.x > c.x0 && v.pos.x < c.x1 && v.pos.z > c.z0 && v.pos.z < c.z1) this.onCrush?.(c.bid);
+      v.pos.y = floor;
+      v.vy = Math.max(0, v.vy);
+      v.airborne = false;
+    } else v.airborne = v.pos.y > floor + 0.05;
+  }
+
+  /** Circle vs AABB for the robot: steps over low things, returns what it pushed against. */
+  private robotMove(p: THREE.Vector3, mx: number, mz: number, radius: number, y0: number, y1: number, step: number) {
+    const hits: import('../world/world').Collider[] = [];
+    const steps = Math.max(1, Math.ceil(Math.hypot(mx, mz) / 0.25));
+    for (let s = 0; s < steps; s++) {
+      p.x += mx / steps;
+      p.z += mz / steps;
+      for (const c of this.world.colliders) {
+        if (c.off || c.top <= y0 + 0.3 || (c.bottom !== undefined && c.bottom >= y1)) continue;
+        if (!c.bid && c.top <= y0 + step) continue; // trees, lamps, poles, the rail embankment: step over
+        const cx = clamp(p.x, c.x0, c.x1), cz = clamp(p.z, c.z0, c.z1);
+        const dx = p.x - cx, dz = p.z - cz;
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= radius * radius) continue;
+        if (!hits.includes(c)) hits.push(c);
+        if (d2 > 1e-8) {
+          const d = Math.sqrt(d2);
+          p.x = cx + (dx / d) * radius;
+          p.z = cz + (dz / d) * radius;
+        } else {
+          const opts = [p.x - c.x0, c.x1 - p.x, p.z - c.z0, c.z1 - p.z];
+          const i = opts.indexOf(Math.min(...opts));
+          if (i === 0) p.x = c.x0 - radius; else if (i === 1) p.x = c.x1 + radius;
+          else if (i === 2) p.z = c.z0 - radius; else p.z = c.z1 + radius;
+        }
+      }
+    }
+    return hits;
   }
 
   private updateGround(dt: number, input: DriveInput) {
@@ -321,7 +464,7 @@ export class Player {
     let floor = this.world.heightAt(x, z) + (onRoad ? 0 : 1.5);
     let ceil = Infinity;
     for (const c of this.world.colliders) {
-      if (x < c.x0 - r || x > c.x1 + r || z < c.z0 - r || z > c.z1 + r) continue;
+      if (c.off || x < c.x0 - r || x > c.x1 + r || z < c.z0 - r || z > c.z1 + r) continue;
       if (prevY >= c.top - 0.05) floor = Math.max(floor, c.top);
       else if (c.bottom !== undefined && prevY + HULL <= c.bottom + 0.05) ceil = Math.min(ceil, c.bottom);
     }
@@ -336,7 +479,7 @@ export class Player {
       p.x += mx / steps;
       p.z += mz / steps;
       for (const c of this.world.colliders) {
-        if (c.top <= y0 || (c.bottom !== undefined && c.bottom >= y1)) continue;
+        if (c.off || c.top <= y0 || (c.bottom !== undefined && c.bottom >= y1)) continue;
         const cx = clamp(p.x, c.x0, c.x1), cz = clamp(p.z, c.z0, c.z1);
         const dx = p.x - cx, dz = p.z - cz;
         const d2 = dx * dx + dz * dz;

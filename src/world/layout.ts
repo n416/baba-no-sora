@@ -45,7 +45,7 @@ export function buildLayout(world: World) {
   };
   const tAt = (x: number) => road.nearest(x, 0).t;
   const face = (t: number, lateral: number) => road.yawAt(t) + (lateral > 0 ? -Math.PI / 2 : Math.PI / 2);
-  const solid = (o: THREE.Object3D, pad = 0.05) => { ctx.add(o); ctx.collideObject(o, pad); return o; };
+  const solid = (o: THREE.Object3D, pad = 0.05) => { ctx.destructible(o); ctx.add(o); ctx.collideObject(o, pad); return o; };
   const edge = road.width / 2 + road.shoulder; // 11 m: where the building line is
   const half = road.width / 2;
 
@@ -340,7 +340,9 @@ function plaza(world: World, r: Rng) {
   ctx.add(makeFence(new THREE.Vector3(30, 0.13, 13), new THREE.Vector3(30, 0.13, 30)));
 
   // the red-lattice building closes the plaza to the south; zakkyo on the other sides
-  solid(ctx, place(makeLatticeBuilding(40, 26, 29, 'BABA CUBE'), 50, 0, 88, Math.PI));
+  const lat = makeLatticeBuilding(40, 26, 29, 'BABA CUBE');
+  lat.userData.building = true;
+  solid(ctx, place(lat, 50, 0, 88, Math.PI));
   solid(ctx, place(makeZakkyo(r, 14, 12, 10, { back: false, rooftopSign: true }), 90, 0, 38, -Math.PI / 2));
   solid(ctx, place(makeZakkyo(r, 11, 15, 8, { back: false }), 95, 0, 58, -Math.PI / 2));
   solid(ctx, place(makeZakkyo(r, 10, 14, 7, { back: false }), 95, 0, 76, -Math.PI / 2));
@@ -352,6 +354,7 @@ function plaza(world: World, r: Rng) {
     x -= w + 0.4;
   }
   const hotel = place(makeHotel(20, 16, 50, 'ホテル 月見'), -47, 0, 62, Math.PI / 2);
+  hotel.userData.building = true;
   solid(ctx, hotel);
 }
 
@@ -371,6 +374,7 @@ function roundRect(w: number, h: number, rad: number) {
 }
 
 function solid(ctx: World['ctx'], o: THREE.Object3D) {
+  if (o.userData.building) ctx.destructible(o);
   ctx.add(o);
   ctx.collideObject(o, 0.05);
   return o;
@@ -525,6 +529,7 @@ function blocks(world: World, r: Rng) {
           const out = rows === 1 ? (r.chance(0.5) ? 1 : -1) : row === 0 ? -1 : 1;
           const yaw = alongX ? (out > 0 ? 0 : Math.PI) : (out > 0 ? Math.PI / 2 : -Math.PI / 2);
           const b = place(makeTower(r, bw, bd, floors * 3.2, { clutter: !far }), x, 0, z, yaw);
+          if (!far) ctx.destructible(b);
           ctx.add(b);
           if (!far) ctx.collideObject(b, 0.05);
         }

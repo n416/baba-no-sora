@@ -20,6 +20,7 @@
       #start h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0.08em; }
       #start p { margin: 6px 0; font-size: 14px; line-height: 1.7; }
       #start .go { margin-top: 14px; font-weight: bold; color: var(--accent); }
+      #start .mode a { color: var(--ink); font-size: 13px; }
       #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(255, 255, 255, 0.8); box-shadow: 0 0 0 1px rgba(40, 30, 60, 0.4); pointer-events: none; }
       #timebar {
         position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
@@ -34,6 +35,11 @@
       #toast { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); padding: 8px 18px; border-radius: 8px; background: var(--paper); font-size: 15px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
       #toast.on { opacity: 1; }
       #vr-button { bottom: 74px !important; }
+      #boss { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); width: min(60vw, 560px); padding: 8px 14px 10px; border-radius: 10px; background: rgba(26, 24, 48, 0.72); color: #fff; font-weight: bold; letter-spacing: 0.1em; pointer-events: none; }
+      #boss .label { font-size: 14px; margin-bottom: 6px; display: flex; justify-content: space-between; }
+      #boss .bar { height: 14px; border-radius: 7px; background: rgba(255, 255, 255, 0.15); overflow: hidden; }
+      #boss .fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff4a6a, #ff9a5a); transition: width 0.15s; }
+      #counter { position: fixed; right: 16px; top: 14px; padding: 6px 12px; border-radius: 8px; background: var(--paper); font-size: 14px; font-weight: bold; }
       .hidden { display: none !important; }
     </style>
   </head>
@@ -44,11 +50,14 @@
         <p id="subtitle"></p>
         <p>W A S D 移動・運転 ／ マウス 視点 ／ Shift 加速<br />58 km/h で <b>Space</b> 離陸 ／ Space・E 上昇 ／ Q 下降 ／ 道路に降りると着陸<br /><b>C</b> 遊覧飛行 ／ F 乗り降り ／ V 一人称・三人称 ／ T 時刻 ／ R 最初に戻る</p>
         <p class="go">クリックで開始</p>
+        <p class="mode"><a id="mode-link" href="?vehicle=robot">▶ 巨大ロボットで遊ぶ（ビーム・バーニア・怪獣）</a></p>
       </div>
     </div>
     <div id="crosshair" class="hidden"></div>
     <div id="hint" class="hidden"></div>
     <div id="toast"></div>
+    <div id="boss" class="hidden"><div class="label"><span>怪獣</span><span id="boss-hp">100</span></div><div class="bar"><div class="fill" id="boss-fill"></div></div></div>
+    <div id="counter" class="hidden"></div>
     <div id="timebar">
       <button id="play" title="1日を早送り (T で時刻ジャンプ)">▶</button>
       <input id="time" type="range" min="0" max="24" step="0.05" value="15.5" aria-label="時刻" />

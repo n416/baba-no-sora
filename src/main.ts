@@ -11,6 +11,7 @@ import { TimeOfDay } from './world/timeofday';
 import { SeasonalParticles } from './world/particles';
 import { COURSE, type Viewpoint } from './world/course';
 import { cruiseNearest } from './world/cruise';
+import { RobotGame } from './game/game';
 import { Player } from './player/player';
 import { XRSupport } from './xr/xr';
 import { Hud } from './ui/hud';
@@ -63,6 +64,10 @@ const player = new Player(world, cfg);
 const pipeline = new Pipeline(renderer);
 pipeline.setSize(window.innerWidth, window.innerHeight);
 const hud = new Hud(tod, cfg);
+// robot mode (?vehicle=robot): beams, verniers, a kaiju
+const game = player.vehicle?.spec.robot ? new RobotGame(world, player, hud) : null;
+if (game) player.onCrush = (id) => game.crush(id);
+let firing = false;
 const xr = new XRSupport(renderer, rig, camera, player, tod);
 xr.onSession((on) => {
   // VR quality preset: smaller shadow map; the post pass switches itself off
@@ -142,6 +147,10 @@ function step(dt: number) {
   tod.update(dt);
   player.update(dt);
   world.update(dt);
+  if (game) {
+    if (firing || xrFire()) game.fire(camera) && (player.vehicle!.aim = 1);
+    game.update(dt, camera);
+  }
   if (!xr.presenting) player.applyCamera(rig, camera);
   xr.update(dt);
   applyLook();
@@ -180,6 +189,10 @@ document.addEventListener('pointerlockchange', () => {
   if (!player.locked) player.keys.clear();
 });
 document.addEventListener('mousemove', (e) => { if (player.locked) player.look(e.movementX, e.movementY); });
+// robot: hold the left button to fire
+document.addEventListener('mousedown', (e) => { if (player.locked && e.button === 0 && game) firing = true; });
+document.addEventListener('mouseup', (e) => { if (e.button === 0) firing = false; });
+function xrFire() { return xr.presenting && !!player.xrInput?.fire; }
 let hintOn = true;
 window.addEventListener('keydown', (e) => {
   if (!player.locked) return;
@@ -224,8 +237,10 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => player.keys.delete(e.code));
 
 /** C: sightseeing flight on/off.  Needs the flying machine and to be riding it. */
+// (the robot has no autopilot: C does nothing there)
 function toggleCruise() {
   const v = player.vehicle;
+  if (v?.spec.robot) { if (player.toggleMount()) hud.toast(player.mode === 'ride' ? 'ロボットに乗った' : '降りた'); return; } // VR: X hold gets in/out
   if (!v?.spec.flight || player.mode !== 'ride') { hud.toast('遊覧飛行は翼のある車に乗って'); return; }
   player.cruise = !player.cruise;
   hud.toast(player.cruise ? (v.airborne ? '遊覧飛行 ON' : '遊覧飛行：離陸します') : '遊覧飛行 OFF（手動）');
@@ -237,7 +252,9 @@ function updateHint() {
   const v = player.vehicle;
   const kmh = v ? Math.round(Math.abs(v.speed) * 3.6) : 0;
   if (player.mode === 'walk' && v && cfg.mobility === 'both' && player.pos.distanceTo(v.pos) < 3.2) hud.hint(`F で${v.spec.name}に乗る`);
-  else if (player.mode === 'ride' && v?.spec.flight) {
+  else if (player.mode === 'ride' && v?.spec.robot) {
+    hud.hint(`${v.airborne ? `飛行中  高度 ${Math.round(v.pos.y)} m` : '歩行'} ／ W S 前後 / A D 旋回 / マウス 照準 / 左クリック ビーム\nShift ダッシュ / Space・E バーニア上昇 / Q 降下 / F 降りる`);
+  } else if (player.mode === 'ride' && v?.spec.flight) {
     const f = v.spec.flight;
     if (player.cruise) hud.hint(`遊覧飛行中  ${kmh} km/h  高度 ${Math.round(v.pos.y)} m  ／ C 手動に戻す`);
     else if (v.airborne) hud.hint(`飛行中  ${kmh} km/h  高度 ${Math.round(v.pos.y)} m\nW S 速度 / A D 旋回 / Space・E 上昇 / Q 下降 / 道路に降りると着陸 / C 遊覧`);
@@ -322,6 +339,52 @@ const api = {
     const v = player.vehicle;
     return { takeoffAt: +takeoffAt.toFixed(1), maxY: +maxY.toFixed(1), loopCoverage: seen.size / 20, airHits: player.airHits, stuckSeconds: +player.stuckTime.toFixed(2), final: [Math.round(v.pos.x), Math.round(v.pos.y), Math.round(v.pos.z)] };
   },
+  /**
+   * Robot mode, one whole round, scripted: beam buildings until the kaiju comes,
+   * beam the kaiju down, wait for the reset.  Returns what happened at each stage.
+   */
+  robotRound() {
+    if (!game) return null;
+    const v = player.vehicle!;
+    player.mode = 'ride';
+    game.reset();
+    const out: Record<string, unknown> = { destructibles: world.destructibles.length };
+    // fly up a little to look down Waseda-dori, then aim at the nearest standing buildings
+    player.xrInput = { throttle: 0, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0, lift: 1 };
+    for (let i = 0; i < 90; i++) step(1 / 60);
+    player.xrInput = { throttle: 0, steer: 0, moveX: 0, moveY: 0, boost: false, turn: 0, lift: 0.35 };
+    out.hoverY = +v.pos.y.toFixed(1);
+    let shots = 0;
+    for (let guard = 0; guard < 600 && game.phase === 'calm'; guard++) {
+      const d = world.destructibles.filter((b) => b.state === 'standing').map((b) => ({ b, dist: b.box.getCenter(new THREE.Vector3()).distanceTo(v.pos) })).sort((a, b) => a.dist - b.dist)[0].b;
+      const c = d.box.getCenter(new THREE.Vector3());
+      if (game.fire(camera, c)) shots++;
+      for (let i = 0; i < 12; i++) step(1 / 60);
+    }
+    out.shotsToSummon = shots;
+    out.downWhenSummoned = game.destruction.downCount;
+    out.phaseAfterSummon = game.phase;
+    // let it rise, then shoot it until it falls
+    for (let i = 0; i < 60 * 4; i++) step(1 / 60);
+    out.kaijuPhase = game.phase;
+    shots = 0;
+    for (let guard = 0; guard < 800 && (game.phase === 'fighting' || game.phase === 'rising'); guard++) {
+      const k = game.kaiju.root.position;
+      if (game.fire(camera, new THREE.Vector3(k.x, k.y + 26, k.z))) shots++;
+      for (let i = 0; i < 12; i++) step(1 / 60);
+    }
+    out.shotsToKill = shots;
+    out.hpAfter = game.hp;
+    out.phaseAfterKill = game.phase;
+    for (let i = 0; i < 60 * 10 && !(game.wins > 0 && game.phase === 'calm'); i++) step(1 / 60);
+    out.wins = game.wins;
+    out.phaseEnd = game.phase;
+    out.standingAfterReset = world.destructibles.filter((b) => b.state === 'standing').length;
+    out.robotAtStart = +v.pos.distanceTo(world.road.pointAt(COURSE.startT)).toFixed(1);
+    player.xrInput = null;
+    return out;
+  },
+  game,
   /** Fly the loop, then descend onto the runway by hand-coded inputs and check it lands. */
   autoLand() {
     const v = player.vehicle;

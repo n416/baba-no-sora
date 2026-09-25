@@ -25,9 +25,11 @@ export interface TowerSpec { style?: FacadeStyle; wall?: string; clutter?: boole
 /** Plain background building: window-grid box, parapet, and (near) rooftop kit. */
 export function makeTower(r: Rng, w: number, d: number, h: number, s: TowerSpec = {}) {
   const g = new THREE.Group();
+  g.userData.building = true;
   const style = s.style ?? r.pick(['office', 'flats', 'tile', 'flats', 'old'] as FacadeStyle[]);
   const wall = s.wall ?? r.pick(PAL.facades);
   g.add(facadeBox(w, h, d, facadeMaterial(style, wall)));
+  g.userData.wall = wall; // rubble takes this colour
   const roofM = M(PAL.roofSlab, 'soft');
   // parapet: a slightly proud rim so the roofline reads against the sky
   g.add(box(w + 0.3, 0.7, 0.3, M(wall), 0, h, d / 2), box(w + 0.3, 0.7, 0.3, M(wall), 0, h, -d / 2));
@@ -70,9 +72,11 @@ function rooftop(r: Rng, g: THREE.Group, w: number, d: number, h: number) {
  */
 export function makeZakkyo(r: Rng, w: number, d: number, floors: number, opts: { back?: boolean; rooftopSign?: boolean; awning?: boolean; izakaya?: boolean } = {}) {
   const g = new THREE.Group();
+  g.userData.building = true;
   const h = floors * FLOOR + 0.4;
   const wall = r.pick(PAL.facades);
   g.add(facadeBox(w, h, d, facadeMaterial(r.pick(['tile', 'old', 'flats'] as FacadeStyle[]), wall)));
+  g.userData.wall = wall;
   g.add(box(w + 0.25, 0.6, d + 0.25, M(wall), 0, h, 0));
   // floor slabs stand 5 cm proud of the wall: the ink finds them, the sun shadows them
   const band = M(shadeHex(wall, 0.9));

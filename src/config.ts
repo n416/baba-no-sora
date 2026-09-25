@@ -5,7 +5,7 @@
 
 export type Season = 'spring' | 'earlySummer' | 'summer' | 'autumn' | 'winter';
 export type Mobility = 'walk' | 'ride' | 'both';
-export type VehicleKind = 'bicycle' | 'scooter' | 'keiTruck' | 'wingCar';
+export type VehicleKind = 'bicycle' | 'scooter' | 'keiTruck' | 'wingCar' | 'robot';
 export type People = 'none' | 'background' | 'protagonist';
 
 export interface WorldConfig {
@@ -46,6 +46,6 @@ export function applyUrlOverrides(cfg: WorldConfig): WorldConfig {
   const m = q.get('mobility') as Mobility | null;
   if (m && ['walk', 'ride', 'both'].includes(m)) out.mobility = m;
   const v = q.get('vehicle') as VehicleKind | null;
-  if (v && ['bicycle', 'scooter', 'keiTruck', 'wingCar'].includes(v)) out.vehicle = v;
+  if (v && ['bicycle', 'scooter', 'keiTruck', 'wingCar', 'robot'].includes(v)) out.vehicle = v;
   return out;
 }

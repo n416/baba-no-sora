@@ -25,14 +25,21 @@ export interface VehicleSpec {
   wheelRadius: number;
   radius: number; // collision radius
   lean: number; // how far it banks into turns (the body only -- never the VR head)
-  chase: { dist: number; height: number };
+  chase: { dist: number; height: number; side?: number; lookY?: number };
   /** Present only on machines that fly.  Speeds in m/s, rates in rad/s and m/s. */
   flight?: { takeoff: number; minAir: number; maxAir: number; airBoost: number; turn: number; climb: number; bank: number };
+  /** Present only on the giant robot: walks anywhere, flies on verniers, fires a beam. */
+  robot?: { walk: number; dash: number; air: number; thrust: number; height: number; step: number; turn: number };
 }
 
 export const VEHICLES: Record<VehicleKind, VehicleSpec> = {
   bicycle: { name: 'ママチャリ', maxSpeed: 5.5, boost: 1.45, accel: 2.2, brake: 5, reverse: 0, turnRate: 1.3, eyeHeight: 1.55, seatBack: 0.25, wheelRadius: 0.33, radius: 0.45, lean: 0.35, chase: { dist: 4.2, height: 2.0 } },
   scooter: { name: '原付', maxSpeed: 8.3, boost: 1.25, accel: 3.0, brake: 6, reverse: 0, turnRate: 1.1, eyeHeight: 1.5, seatBack: 0.2, wheelRadius: 0.27, radius: 0.55, lean: 0.3, chase: { dist: 4.6, height: 2.1 } },
+  robot: {
+    name: '巨大ロボット', maxSpeed: 7, boost: 2.2, accel: 9, brake: 14, reverse: 4, turnRate: 1.0, eyeHeight: 16.5, seatBack: -2.0, wheelRadius: 1, radius: 3.4, lean: 0,
+    chase: { dist: 30, height: 21, side: 5, lookY: 14 },
+    robot: { walk: 7, dash: 16, air: 24, thrust: 26, height: 20, step: 9.5, turn: 1.0 },
+  },
   wingCar: {
     name: '翼のある車', maxSpeed: 14, boost: 1.5, accel: 4, brake: 8, reverse: 3, turnRate: 0.9, eyeHeight: 1.0, seatBack: 0.25, wheelRadius: 0.28, radius: 1.05, lean: 0, chase: { dist: 6.6, height: 2.3 },
     flight: { takeoff: 16, minAir: 12, maxAir: 22, airBoost: 1.4, turn: 0.55, climb: 7, bank: 0.45 },
@@ -50,6 +57,12 @@ export interface VehicleBody {
   wings?: THREE.Group[];
   /** Spun about local Z. */
   prop?: THREE.Group;
+  /** Robot: legs and arms (pivots swung about X), vernier flames (scaled by thrust), the beam muzzle. */
+  legs?: THREE.Group[];
+  arms?: THREE.Group[];
+  flames?: THREE.Object3D[];
+  thrusterMat?: THREE.MeshToonMaterial;
+  muzzle?: THREE.Object3D;
 }
 
 function wheel(r: number, width: number) {
@@ -244,7 +257,95 @@ function buildWingCar(): VehicleBody {
   return { root, body, wheels: wheelsOut, lamp: lampMat, wings, prop };
 }
 
+/**
+ * A giant robot, ~20 m: cream armour with teal and orange trim (the winged car's
+ * colours), a crested head with a glowing visor, a backpack with two vernier
+ * nozzles, and a beam rifle built into the right forearm.  Front toward -z.
+ * Invented design.
+ */
+function buildRobot(): VehicleBody {
+  const root = new THREE.Group(), body = new THREE.Group();
+  root.add(body);
+  const cream = M('#efe4cc'), teal = M('#3f9a9c'), orange = M('#e0843e'), dark = M('#3a3e48'), steel = M('#9aa0a8');
+  const visor = cel('#7ff0ff');
+  visor.emissive = new THREE.Color('#7ff0ff');
+  visor.emissiveIntensity = 1.2; // always lit: it is an eye, not a window
+  const thrusterMat = cel('#6a6e78');
+  thrusterMat.emissive = new THREE.Color('#8fe8ff');
+  thrusterMat.emissiveIntensity = 0;
+  // legs: hip pivot at y 9
+  const legs: THREE.Group[] = [];
+  for (const s of [-1, 1]) {
+    const leg = new THREE.Group();
+    leg.position.set(s * 2.2, 9, 0);
+    leg.add(box(2.4, 3.6, 2.6, cream, 0, -3.6, 0)); // thigh
+    leg.add(box(2.0, 0.6, 2.2, dark, 0, -4.2, 0)); // knee joint
+    leg.add(box(2.8, 3.6, 3.0, cream, 0, -7.8, 0.1)); // shin
+    leg.add(box(2.9, 1.0, 1.0, orange, 0, -5.4, -1.45)); // knee guard
+    leg.add(box(3.0, 1.2, 4.6, teal, 0, -9, -0.5)); // foot
+    body.add(leg);
+    legs.push(leg);
+  }
+  // pelvis, torso, chest
+  body.add(box(5.2, 2.0, 3.2, dark, 0, 8.2, 0));
+  body.add(box(1.6, 1.6, 0.6, orange, 0, 8.3, -1.8)); // crotch plate
+  body.add(box(7.2, 5.2, 4.6, cream, 0, 10.2, 0));
+  body.add(box(6.0, 2.4, 0.6, teal, 0, 12.2, -2.4)); // chest plate
+  for (const s of [-1, 1]) body.add(box(1.4, 0.9, 0.4, M('#f2d24a'), s * 1.9, 12.9, -2.8)); // chest vents
+  body.add(box(4.0, 1.2, 0.5, dark, 0, 10.6, -2.4)); // cockpit hatch
+  // backpack + verniers
+  body.add(box(4.6, 4.2, 2.2, teal, 0, 10.6, 3.2));
+  const flames: THREE.Object3D[] = [];
+  const flameMat = new THREE.MeshBasicMaterial({ color: '#9ff0ff', transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+  for (const s of [-1, 1]) {
+    const noz = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.0, 1.6, 10), thrusterMat);
+    noz.position.set(s * 1.3, 10.0, 4.4);
+    noz.rotation.x = 0.35;
+    body.add(noz);
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.8, 5, 10, 1, true).translate(0, -2.5, 0), flameMat);
+    flame.position.set(s * 1.3, 9.2, 4.7);
+    flame.rotation.x = 0.35;
+    flame.userData.noOutline = true;
+    flame.scale.setScalar(0.001);
+    body.add(flame);
+    flames.push(flame);
+  }
+  // head (hidden from the cockpit view: the pilot's eye is just in front of the visor)
+  for (const m of [box(2.4, 2.2, 2.6, cream, 0, 15.4, -0.2), box(2.0, 0.5, 0.3, visor, 0, 16.3, -1.55), box(0.35, 1.4, 2.4, orange, 0, 17.4, -0.1), box(2.6, 0.6, 0.6, dark, 0, 15.2, -1.4)]) {
+    m.userData.head = true;
+    body.add(m);
+  }
+  // arms: shoulder pivot at y 14.3
+  const arms: THREE.Group[] = [];
+  let muzzle: THREE.Object3D | undefined;
+  for (const s of [-1, 1]) {
+    const arm = new THREE.Group();
+    arm.position.set(s * 4.9, 14.3, 0);
+    arm.add(box(2.8, 2.6, 3.0, cream, 0, -1.1, 0)); // shoulder armour
+    arm.add(box(0.4, 2.2, 3.1, orange, s * 1.45, -1.0, 0));
+    arm.add(box(1.5, 3.2, 1.6, dark, 0, -4.2, 0)); // upper arm
+    arm.add(box(2.0, 3.6, 2.2, cream, 0, -7.9, 0)); // forearm
+    arm.add(box(1.6, 1.4, 1.6, dark, 0, -9.2, 0)); // hand
+    if (s > 0) {
+      // beam rifle along the forearm, pointing forward
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.5, 5.5, 10), steel);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0.9, -6.6, -2.4);
+      arm.add(barrel);
+      arm.add(box(1.0, 1.0, 2.2, teal, 0.9, -7.1, -0.4));
+      muzzle = new THREE.Object3D();
+      muzzle.position.set(0.9, -6.6, -5.3);
+      arm.add(muzzle);
+    }
+    body.add(arm);
+    arms.push(arm);
+  }
+  addOutline(body);
+  return { root, body, wheels: [], legs, arms, flames, thrusterMat, muzzle };
+}
+
 const BUILDERS: Record<VehicleKind, () => VehicleBody> = {
+  robot: buildRobot,
   wingCar: buildWingCar,
   bicycle: buildBicycle,
   scooter: buildScooter,
@@ -267,12 +368,25 @@ export class Vehicle {
   private pitchVis = 0;
   private propSpin = 0;
   private hullsShown = true;
+  /** Robot: vernier output 0..1 (flames, glow), walk cycle phase, arm raised to aim. */
+  thrust = 0;
+  private stride = 0;
+  aim = 0;
+  /** Knock-back velocity (robot), decays. */
+  readonly push = new THREE.Vector3();
+
+  /** World position of the beam muzzle (robot only; falls back to the chest). */
+  muzzle(out: THREE.Vector3) {
+    const m = this.parts.muzzle;
+    if (m) { m.updateWorldMatrix(true, false); return m.getWorldPosition(out); }
+    return out.set(this.pos.x, this.pos.y + 12, this.pos.z);
+  }
 
   /** From the seat (first person, VR) the machine's own outline shells only get in the way. */
   showHulls(on: boolean) {
     if (on === this.hullsShown) return;
     this.hullsShown = on;
-    this.parts.root.traverse((o) => { if (o.userData.isOutline) o.visible = on; });
+    this.parts.root.traverse((o) => { if (o.userData.isOutline || o.userData.head) o.visible = on; });
   }
 
   constructor(kind: VehicleKind) {
@@ -327,6 +441,25 @@ export class Vehicle {
       const fold = (1 - this.wingOpen) * (Math.PI / 2 - 0.12);
       p.wings[0].rotation.z = -fold;
       p.wings[1].rotation.z = fold;
+    }
+    if (s.robot && p.legs && p.arms) {
+      // walk cycle from ground speed; legs trail and arms spread a little in the air
+      this.stride += Math.abs(this.speed) * dt * 0.32;
+      const air = this.airborne ? 1 : 0;
+      const swing = air ? 0.25 : Math.sin(this.stride) * Math.min(0.55, Math.abs(this.speed) * 0.07);
+      p.legs[0].rotation.x = swing + air * 0.2;
+      p.legs[1].rotation.x = -swing + air * 0.35;
+      p.arms[0].rotation.x = -swing * 0.8 - air * 0.3;
+      p.arms[0].rotation.z = -air * 0.25;
+      // the right arm (rifle) comes up to level when firing
+      this.aim = Math.max(0, this.aim - dt * 1.5);
+      p.arms[1].rotation.x = swing * 0.8 * (1 - this.aim) + this.aim * (Math.PI / 2 - 0.05) - air * 0.3 * (1 - this.aim);
+      p.body.position.y = air ? 0 : Math.abs(Math.cos(this.stride)) * Math.min(0.5, Math.abs(this.speed) * 0.05);
+      p.body.rotation.x = air ? -Math.min(0.25, Math.abs(this.speed) * 0.012) : 0; // lean into flight
+      if (p.flames && p.thrusterMat) {
+        for (const f of p.flames) f.scale.set(0.6 + this.thrust * 0.5, 0.001 + this.thrust * (1 + Math.random() * 0.25), 0.6 + this.thrust * 0.5);
+        p.thrusterMat.emissiveIntensity = this.thrust * 2;
+      }
     }
     if (p.prop) {
       const rate = 6 + Math.abs(this.speed) * 3 + (this.airborne ? 20 : 0);
