@@ -79,11 +79,32 @@ export const SLASHES: { name: string; dur: number; wind: Pose; strike: Pose; fol
   // overhead: blade back over the head, then straight down in line with the arms
   { name: '唐竹割り', dur: 0.75,
     wind: P([3.55, 0.1, 0], [3.45, -0.25, -0.2], [0.28, 0, 0], 0.3, 0, 0.8, -0.3),
-    strike: P([1.3, 0.1, 0], [1.25, -0.35, -0.15], [-0.4, 0, 0], 1.0, 5, 0, -1.0),
-    follow: P([0.95, 0.1, 0], [0.9, -0.35, -0.1], [-0.4, 0, 0], 1.0, 5.5, 0, -0.45) },
+    strike: P([1.35, 0.1, 0], [1.3, -0.35, -0.15], [-0.38, 0, 0], 1.0, 5, 0, -0.85),
+    follow: P([1.15, 0.1, 0], [1.1, -0.35, -0.1], [-0.36, 0, 0], 0.95, 5.5, 0, -0.4) },
 ];
 const lerpV = (a: V3, b: V3, k: number): V3 => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 const ease = (k: number) => { const x = Math.max(0, Math.min(1, k)); return x * x * (3 - 2 * x); };
+/** Pose -> flat number list and back, for the spline. */
+const flatPose = (q: Pose) => [...q.ra, ...q.la, ...q.up, q.st, q.lunge, q.hop, q.wp];
+const unflatPose = (a: number[]): Pose => ({ ra: [a[0], a[1], a[2]], la: [a[3], a[4], a[5]], up: [a[6], a[7], a[8]], st: a[9], lunge: a[10], hop: a[11], wp: a[12] });
+/**
+ * Non-uniform Catmull-Rom through `keys` at `times` (0..1), with zero speed at both
+ * ends: continuous position AND velocity at every key.
+ */
+function splinePose(keys: Pose[], times: number[], k: number): Pose {
+  const x = Math.max(0, Math.min(1, k));
+  let i = 0;
+  while (i < times.length - 2 && x > times[i + 1]) i++;
+  const P = keys.map(flatPose);
+  const t0 = times[i], t1 = times[i + 1], h = t1 - t0;
+  const tangent = (j: number) => (j === 0 || j === keys.length - 1)
+    ? P[j].map(() => 0)
+    : P[j].map((_, c) => (P[j + 1][c] - P[j - 1][c]) / (times[j + 1] - times[j - 1]));
+  const m0 = tangent(i), m1 = tangent(i + 1);
+  const u = (x - t0) / h, u2 = u * u, u3 = u2 * u;
+  const h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+  return unflatPose(P[i].map((p0, c) => h00 * p0 + h10 * h * m0[c] + h01 * P[i + 1][c] + h11 * h * m1[c]));
+}
 const blend = (a: Pose, b: Pose, k: number): Pose => ({
   ra: lerpV(a.ra, b.ra, k), la: lerpV(a.la, b.la, k), up: lerpV(a.up, b.up, k),
   st: a.st + (b.st - a.st) * k, lunge: a.lunge + (b.lunge - a.lunge) * k, hop: a.hop + (b.hop - a.hop) * k, wp: a.wp + (b.wp - a.wp) * k,
@@ -516,8 +537,14 @@ export class Vehicle {
   readonly saber = { state: 'stowed' as 'stowed' | 'drawing' | 'ready' | 'slash' | 'stowing', t: 0, combo: 0, dur: 0.45, ignite: 0, step: 1 };
   /** Metres of the current cut's step already applied to pos (root motion). */
   private stepDone = 0;
-  /** The saber pose last frame: every move blends from here. */
+  /** Where the feet are now (local z), and where they were when the current cut began. */
+  private feetNow = { front: GUARD_FRONT, back: GUARD_BACK };
+  private feetStart = { front: GUARD_FRONT, back: GUARD_BACK };
+  private hipS = 9;
+  private shimmer = 0;
+  /** The saber pose last frame, and the pose when the current cut began (its wind-up blends from there). */
   private poseNow: Pose = REST_POSE;
+  private slashFrom: Pose = REST_POSE;
 
   /** Saber back on the backpack, instantly (round reset). */
   resetSaber() {
@@ -528,6 +555,7 @@ export class Vehicle {
     if (p.saberBlade) p.saberBlade.scale.z = 0.001;
     if (p.upper) p.upper.rotation.set(0, 0, 0);
     this.poseNow = REST_POSE;
+    this.hipS = HIP;
   }
   drawSaber() { if (this.saber.state === 'stowed' || this.saber.state === 'stowing') { this.saber.state = 'drawing'; this.saber.t = 0; } }
   stowSaber() { if (this.saber.state !== 'stowed' && this.saber.state !== 'stowing') { this.saber.state = 'stowing'; this.saber.t = 0; } }
@@ -537,6 +565,8 @@ export class Vehicle {
     if (sb.state !== 'ready' && !(sb.state === 'slash' && sb.t > sb.dur * 0.62)) return false;
     sb.state = 'slash'; sb.t = 0; sb.combo = i; sb.dur = SLASHES[i].dur;
     this.stepDone = 0;
+    this.feetStart = { ...this.feetNow }; // a chained cut starts its footwork from mid-recovery
+    this.slashFrom = this.poseNow;
     return true;
   }
   /** World positions of the blade's base and tip (for hits and the trail). */
@@ -579,10 +609,9 @@ export class Vehicle {
     } else if (sb.state === 'slash') {
       const S = SLASHES[sb.combo];
       const k = sb.t / S.dur;
-      if (k < 0.3) key = blend(this.poseNow, S.wind, ease(k / 0.3));
-      else if (k < 0.55) key = blend(S.wind, S.strike, (k - 0.3) / 0.25); // the swing itself: fast and linear
-      else if (k < 0.8) key = blend(S.strike, S.follow, ease((k - 0.55) / 0.25));
-      else key = blend(S.follow, GUARD, ease((k - 0.8) / 0.2));
+      // one smooth curve through start -> wind-up -> strike -> follow-through -> guard:
+      // the speed changes continuously, so there is no hitch at any key
+      key = splinePose([this.slashFrom, S.wind, S.strike, S.follow, GUARD], [0, 0.3, 0.55, 0.8, 1], k);
       ignite = 1;
       if (k >= 1) { sb.state = 'ready'; sb.t = 0; }
     } else if (sb.state === 'stowing') {
@@ -594,7 +623,8 @@ export class Vehicle {
       if (k >= 1) { sb.state = 'stowed'; sb.t = 0; this.aim = 0; }
     }
     sb.ignite = ignite;
-    if (p.saberBlade) p.saberBlade.scale.z = Math.max(0.001, ignite * (0.96 + Math.random() * 0.08)); // a little shimmer
+    this.shimmer += dt;
+    if (p.saberBlade) p.saberBlade.scale.z = Math.max(0.001, ignite * (1 + 0.01 * Math.sin(this.shimmer * 37))); // a faint, smooth pulse (random per-frame jitter read as stutter)
     const [ra, la] = [p.arms![1], p.arms![0]];
     ra.rotation.order = la.rotation.order = 'YXZ';
     ra.rotation.set(key.ra[0], key.ra[1], key.ra[2]);
@@ -602,42 +632,58 @@ export class Vehicle {
     p.upper?.rotation.set(key.up[0], key.up[1], key.up[2]);
     if (p.saberHand) p.saberHand.rotation.x = key.wp; // the wrist
     // ---- footwork -------------------------------------------------------------------
-    // Feet are placed in the robot's local z (forward -).  During a cut the front
-    // foot lifts, swings forward and plants while the robot itself moves forward
-    // by the step length; the back foot stays planted in the world (so in local
-    // terms it falls behind) until the recovery, when it is drawn up.
-    // a deeper stance mostly reaches the front foot forward; the back foot stays near its spot
-    let front = GUARD_FRONT * (1 + key.st * 0.5), back = GUARD_BACK * (1 + key.st * 0.2), liftF = 0, liftB = 0;
+    // Feet are placed in the robot's local z (forward -).  A cut is a lunge and a
+    // recovery, and every foot position is continuous from frame to frame:
+    //   wind-up   the feet settle from wherever they were into the guard stance;
+    //   step      the front foot lifts, swings forward and plants while the body is
+    //             carried forward about half as far (root motion); the back foot
+    //             stays planted in the world, so in local terms it falls behind;
+    //   recovery  the body comes up over the front foot (more root motion, the front
+    //             foot stays planted) while the back foot is lifted and drawn up --
+    //             ending exactly in the guard stance, a step further on.
+    const gFront = GUARD_FRONT * (1 + key.st * 0.5), gBack = GUARD_BACK * (1 + key.st * 0.2);
+    let front = gFront, back = gBack, liftF = 0, liftB = 0;
     if (sb.state === 'slash') {
       const k = sb.t / sb.dur;
       const L = STEP_IN[sb.combo] * sb.step;
-      // root motion: the body is carried forward about half as far as the front foot reaches,
-      // the rest is the lunge -- so the back foot can stay planted
-      const D = L * BODY_SHARE * ease((k - 0.28) / 0.27);
-      const dD = D - this.stepDone;
-      this.stepDone = D;
-      this.pos.x -= Math.sin(this.yaw) * dD;
-      this.pos.z -= Math.cos(this.yaw) * dD;
-      // front foot: in the air from 0.28 to 0.55, landing a little further ahead than it started
+      const settle = ease(k / 0.28);
+      const f0 = this.feetStart.front * (1 - settle) + gFront * settle;
+      const b0 = this.feetStart.back * (1 - settle) + gBack * settle;
+      // the lunge
       const u = Math.max(0, Math.min(1, (k - 0.28) / 0.27));
+      const D = L * BODY_SHARE * ease(u);
+      const landAt = Math.max(-FRONT_MAX, gFront - L * (1 - BODY_SHARE) - 0.8);
       if (u > 0 && u < 1) liftF = Math.sin(Math.PI * u) * 2.2;
-      const landAt = Math.max(-FRONT_MAX, front - L * (1 - BODY_SHARE) - 0.8);
-      front = (front + D) * (1 - u) + landAt * u;
-      // back foot: planted -- it drifts back in local terms as the body moves -- then steps up in the recovery
-      const r = Math.max(0, Math.min(1, (k - 0.78) / 0.22));
+      front = (f0 + D) * (1 - u) + landAt * u;
       // (a step longer than the leg can trail drags the back foot along rather than sinking the hips)
-      back = Math.min(BACK_MAX, back + D * (1 - ease(r)));
+      back = Math.min(BACK_MAX, b0 + D);
+      // the recovery: rise over the planted front foot, draw the back foot up
+      const r = Math.max(0, Math.min(1, (k - 0.78) / 0.22));
+      const E = (gFront - landAt) * ease(r);
+      front += E;
+      back = back * (1 - ease(r)) + gBack * ease(r);
       if (r > 0 && r < 1) liftB = Math.sin(Math.PI * r) * 1.6;
+      // root motion for whatever the body travelled this frame
+      const dTotal = D + E - this.stepDone;
+      this.stepDone = D + E;
+      this.pos.x -= Math.sin(this.yaw) * dTotal;
+      this.pos.z -= Math.cos(this.yaw) * dTotal;
     } else this.stepDone = 0;
+    this.feetNow.front = front;
+    this.feetNow.back = back;
     // hips: as low as the stance asks, and low enough that both planted feet can reach the ground
     const walkLegs0 = walkLegs;
     let hipY = HIP - key.st * 1.6 + key.hop;
+    // every foot counts, a lifted one at its lift height: as the lift eases to zero the
+    // limit eases in with it, so landing never yanks the hips down in one frame
     for (const [z, lift] of [[front, liftF], [back, liftB]] as const) {
-      if (lift > 0) continue;
-      const maxDrop = Math.sqrt(Math.max(0, (THIGH + SHIN - 0.05) ** 2 - z * z)) + ANKLE;
-      hipY = Math.min(hipY, maxDrop);
+      const reachable = Math.sqrt(Math.max(0, (THIGH + SHIN - 0.05) ** 2 - z * z)) + ANKLE + lift;
+      hipY = Math.min(hipY, reachable);
     }
     hipY = Math.max(HIP - MAX_LUNGE, hipY) * (1 - walk) + HIP * walk;
+    // the hips follow that height with a quick spring, never a one-frame drop
+    this.hipS += (hipY - this.hipS) * Math.min(1, dt * 14);
+    hipY = this.hipS;
     // solve each leg; the foot stays level
     const legsTarget: [number, number][] = [[front, liftF], [back, liftB]];
     for (let i = 0; i < 2; i++) {
