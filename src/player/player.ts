@@ -129,7 +129,7 @@ export class Player {
     const k = this.keys;
     const f = (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0);
     const s = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
-    const lift = (k.has('Space') || k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0);
+    const lift = (k.has('Space') || k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') || k.has('ControlLeft') || k.has('ControlRight') ? 1 : 0);
     return { throttle: f, steer: s, moveX: s, moveY: f, boost: k.has('ShiftLeft') || k.has('ShiftRight'), turn: 0, lift };
   }
 
@@ -296,13 +296,26 @@ export class Player {
    * lands on roofs, and flattens a small building it walks into -- or any
    * building it rams at dash or flying speed.
    */
+  /** Robot: 0..1, how far into a powered dive (Ctrl / Q) it is. */
+  private dive = 0;
+
+  /** Highest ground or roof under (x, z) at or below height y. */
+  private floorBelow(x: number, z: number, y: number) {
+    let f = this.world.heightAt(x, z);
+    for (const c of this.world.colliders) {
+      if (c.off || c.top > y + 0.3 || c.top <= f || x < c.x0 || x > c.x1 || z < c.z0 || z > c.z1) continue;
+      f = c.top;
+    }
+    return f;
+  }
+
   private updateRobot(dt: number, input: DriveInput) {
     const v = this.vehicle!, R = v.spec.robot!;
     this.shakeT += dt;
     this.shake *= Math.exp(-dt * 9);
-    // boosting: dashing along the ground, or the verniers lit
+    // boosting: dashing along the ground, climbing on the verniers or diving -- not the landing burn, which is braking
     const dash = input.boost && Math.abs(v.speed) > R.walk + 1 ? Math.min(1, (Math.abs(v.speed) - R.walk) / (R.dash - R.walk)) : 0;
-    this.boostLevel = Math.max(dash, v.thrust > 0.3 ? v.thrust : 0, v.airborne && input.boost ? 0.8 : 0);
+    this.boostLevel = Math.max(dash, input.lift > 0 ? v.thrust : 0, v.airborne && input.boost ? 0.8 : 0, v.airborne ? this.dive : 0);
     // turning: tank-style, and the camera turns with it (mouse look is on top)
     v.steerInput += (input.steer - v.steerInput) * Math.min(1, dt * 6);
     v.yaw -= v.steerInput * R.turn * dt;
@@ -310,11 +323,27 @@ export class Player {
     const target = input.throttle * top;
     const acc = (v.airborne ? 10 : v.spec.accel) * dt;
     v.speed += Math.max(-acc, Math.min(acc, target - v.speed));
-    // verniers
-    v.thrust += ((input.lift > 0 ? 1 : input.boost && input.throttle > 0 && v.airborne ? 0.5 : 0) - v.thrust) * Math.min(1, dt * 6);
+    // vertical: everything is an acceleration, so the machine keeps its momentum --
+    // a dive started mid-climb first carries it on up, slows it, then drops it
+    this.dive += ((input.lift < 0 ? 1 : 0) - this.dive) * Math.min(1, dt * 2.2); // the dive builds up
+    let burn = false;
     if (input.lift > 0) v.vy = Math.min(14, v.vy + R.thrust * dt);
-    else if (input.lift < 0) v.vy = Math.max(-22, v.vy - 30 * dt);
-    else if (v.airborne) v.vy = Math.max(-20, v.vy - (v.thrust > 0.1 ? 4 : 14) * dt); // falls, softly while jets idle
+    else if (v.airborne) {
+      // free fall: a heavy machine drops like one
+      v.vy -= (FALL_G + DIVE_G * this.dive) * dt;
+      v.vy = Math.max(v.vy, -(FALL_MAX + (DIVE_MAX - FALL_MAX) * this.dive));
+      // landing burn: too fast for the ground coming up, the verniers fire to brake --
+      // unless diving (Ctrl / Q), which slams it down on purpose
+      if (input.lift === 0 && v.vy < -LAND_VY) {
+        const h = v.pos.y - this.floorBelow(v.pos.x, v.pos.z, v.pos.y);
+        if (h < (v.vy * v.vy - LAND_VY * LAND_VY) / (2 * BURN_A) + 6) {
+          v.vy = Math.min(-LAND_VY, v.vy + (BURN_A + FALL_G) * dt);
+          burn = true;
+        }
+      }
+    }
+    // the verniers show whenever they are what is holding the machine up
+    v.thrust += ((input.lift > 0 || burn ? 1 : input.boost && input.throttle > 0 && v.airborne ? 0.5 : 0) - v.thrust) * Math.min(1, dt * (burn ? 14 : 6));
     // knock-back decays
     v.pos.x += v.push.x * dt;
     v.pos.z += v.push.z * dt;
@@ -345,7 +374,7 @@ export class Player {
     if (v.pos.y <= floor) {
       // a hard landing on a building flattens it
       if (v.vy < -12) for (const c of this.world.colliders) if (c.bid && !c.off && Math.abs(c.top - floor) < 0.5 && v.pos.x > c.x0 && v.pos.x < c.x1 && v.pos.z > c.z0 && v.pos.z < c.z1) this.onCrush?.(c.bid);
-      if (v.airborne && v.vy < -4) this.onLand?.(-v.vy);
+      if (v.airborne && v.vy < -4) { this.onLand?.(-v.vy); this.kick(Math.min(1.6, -v.vy * 0.03)); }
       v.pos.y = floor;
       v.vy = Math.max(0, v.vy);
       v.airborne = false;
@@ -526,6 +555,12 @@ export class Player {
     camera.rotation.set(this.eyePitch, 0, 0);
   }
 }
+
+/**
+ * Robot vertical motion (m/s, m/s²): free fall and its terminal speed; the dive
+ * adds to both; the landing burn brakes to LAND_VY at BURN_A.
+ */
+const FALL_G = 24, FALL_MAX = 42, DIVE_G = 30, DIVE_MAX = 75, LAND_VY = 10, BURN_A = 32;
 
 const _r = new THREE.Vector3(), _w = new THREE.Vector3(), _l = new THREE.Vector3();
 /** Height of the flying car's hull above its origin, for vertical overlap. */

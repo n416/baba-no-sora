@@ -224,6 +224,7 @@ window.addEventListener('keydown', (e) => {
   if (!player.locked) return;
   sfx.unlock();
   player.keys.add(e.code);
+  if (e.ctrlKey) e.preventDefault(); // Ctrl is the robot's dive: keep the browser's shortcuts out of it
   switch (e.code) {
     case 'KeyF':
       if (player.toggleMount()) hud.toast(player.mode === 'ride' ? `${player.vehicle!.spec.name}に乗った` : '降りた');
@@ -283,7 +284,7 @@ function updateHint() {
   const kmh = v ? Math.round(Math.abs(v.speed) * 3.6) : 0;
   if (player.mode === 'walk' && v && cfg.mobility === 'both' && player.pos.distanceTo(v.pos) < 3.2) hud.hint(`F で${v.spec.name}に乗る`);
   else if (player.mode === 'ride' && v?.spec.robot) {
-    hud.hint(`${v.airborne ? `飛行中  高度 ${Math.round(v.pos.y)} m` : '歩行'} ／ W S 前後 / A D 旋回 / マウス 照準 / 左クリック ${game?.mode === 'melee' ? 'サーベルで斬る（連打で連続技）' : 'ビーム（腕と体がターゲットへ向く。後ろは撃てない）'}\nShift ダッシュ / Space・E バーニア上昇 / Q 降下 / F 降りる`);
+    hud.hint(`${v.airborne ? `飛行中  高度 ${Math.round(v.pos.y)} m` : '歩行'} ／ W S 前後 / A D 旋回 / マウス 照準 / 左クリック ${game?.mode === 'melee' ? 'サーベルで斬る（連打で連続技）' : 'ビーム（腕と体がターゲットへ向く。後ろは撃てない）'}\nShift ダッシュ / Space・E バーニア上昇 / Ctrl・Q 急降下 / F 降りる`);
   } else if (player.mode === 'ride' && v?.spec.flight) {
     const f = v.spec.flight;
     if (player.cruise) hud.hint(`遊覧飛行中  ${kmh} km/h  高度 ${Math.round(v.pos.y)} m  ／ C 手動に戻す`);
