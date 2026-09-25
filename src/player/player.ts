@@ -298,6 +298,11 @@ export class Player {
    */
   private updateRobot(dt: number, input: DriveInput) {
     const v = this.vehicle!, R = v.spec.robot!;
+    this.shakeT += dt;
+    this.shake *= Math.exp(-dt * 9);
+    // boosting: dashing along the ground, or the verniers lit
+    const dash = input.boost && Math.abs(v.speed) > R.walk + 1 ? Math.min(1, (Math.abs(v.speed) - R.walk) / (R.dash - R.walk)) : 0;
+    this.boostLevel = Math.max(dash, v.thrust > 0.3 ? v.thrust : 0, v.airborne && input.boost ? 0.8 : 0);
     // turning: tank-style, and the camera turns with it (mouse look is on top)
     v.steerInput += (input.steer - v.steerInput) * Math.min(1, dt * 6);
     v.yaw -= v.steerInput * R.turn * dt;
@@ -506,11 +511,18 @@ export class Player {
     return hit;
   }
 
+  /** Camera shake (m), decaying: a heavy blow or footfall.  Desktop only -- never shake a VR head. */
+  private shake = 0;
+  private shakeT = 0;
+  kick(amount: number) { this.shake = Math.max(this.shake, amount); }
+  /** 0..1, how hard the machine is boosting (dash, verniers), for the screen effect. */
+  boostLevel = 0;
+
   /** Put the camera rig where this frame's eye is (desktop only; XR drives the head itself). */
   applyCamera(rig: THREE.Object3D, camera: THREE.Camera) {
     rig.position.copy(this.eye);
     rig.rotation.set(0, this.eyeYaw, 0);
-    camera.position.set(0, 0, 0);
+    camera.position.set(Math.sin(this.shakeT * 41) * this.shake * 0.6, Math.sin(this.shakeT * 33 + 1.3) * this.shake, 0);
     camera.rotation.set(this.eyePitch, 0, 0);
   }
 }

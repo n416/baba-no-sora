@@ -62,18 +62,24 @@ const P = (ra: V3, la: V3, up: V3, st: number, lunge = 0, hop = 0, wp = 0, two =
 const REST_POSE = P([0, 0, 0], [0, 0, 0], [0, 0, 0], 0);
 const GUARD = P([1.15, 0.3, -0.15], [1.0, -0.45, 0.2], [-0.05, -0.2, 0], 0.35, 0, 0, 0, 1); // both hands on the grip
 const REACH = P([3.45, 0, 0.3], [0.35, 0, 0.15], [0.05, 0.25, -0.05], 0.15);
-/** The combo: a diagonal cut, a backhand sweep, a rising cut, a two-handed overhead finisher. */
+/**
+ * The combo: a diagonal cut, a sweep, a rising cut, a two-handed overhead finisher.
+ * Each cut starts where the one before it ended (low left -> sweep to the right ->
+ * up from low right -> overhead -> down), so a chained combo never passes back
+ * through the guard.
+ */
 export const SLASHES: { name: string; dur: number; wind: Pose; strike: Pose; follow: Pose }[] = [
   // diagonal: the blade leans over the shoulder, then cuts down across the body
   { name: '袈裟斬り', dur: 0.85,
     wind: P([3.0, -0.45, -0.5], [2.2, -0.3, 0.3], [0.12, -0.6, -0.12], 0.45, 0, 0, -0.2, 0.8),
     strike: P([1.0, 0.35, 0.35], [0.7, -0.2, 0.1], [-0.22, 0.4, 0.14], 0.8, 3, 0, -0.9, 0.4),
     follow: P([0.85, 0.75, 0.45], [0.45, 0.2, 0.2], [-0.24, 0.6, 0.16], 0.85, 3.5, 0, -0.45) },
-  // horizontal: arm level, blade laid out along it, a flat arc from right to left at chest height
+  // horizontal: arm level, blade laid out along it, a flat arc at chest height from
+  // the left (where the diagonal cut left the blade) round to the right
   { name: '横薙ぎ', dur: 0.85,
-    wind: P([1.5, -1.2, 0], [1.2, -0.9, 0.1], [0.02, -0.65, 0.06], 0.6, 0, 0, -1.4, 1),
+    wind: P([1.5, 1.2, 0], [1.2, 0.9, 0.1], [0.02, 0.65, -0.06], 0.6, 0, 0, -1.4, 1),
     strike: P([1.55, 0.0, 0], [0.8, -0.2, 0.3], [-0.1, 0.0, 0], 0.8, 2, 0, -1.5, 1),
-    follow: P([1.5, 1.2, 0], [0.4, 0.9, 0.5], [-0.08, 0.75, -0.06], 0.75, 2.5, 0, -1.45, 1) },
+    follow: P([1.5, -1.2, 0], [0.4, -0.9, 0.5], [-0.08, -0.75, 0.06], 0.75, 2.5, 0, -1.45, 1) },
   // rising: blade trailing low behind, swept up past the face
   { name: '斬り上げ', dur: 0.85,
     wind: P([0.55, -0.6, 0.45], [0.4, 0.3, 0.2], [-0.3, 0.3, 0.08], 1.0, 0, 0, -0.25, 0.7),
@@ -85,6 +91,14 @@ export const SLASHES: { name: string; dur: number; wind: Pose; strike: Pose; fol
     strike: P([1.35, 0.1, 0], [1.3, -0.35, -0.15], [-0.38, 0, 0], 1.0, 5, 0, -0.85, 1),
     follow: P([1.15, 0.1, 0], [1.1, -0.35, -0.1], [-0.36, 0, 0], 0.95, 5.5, 0, -0.4, 1) },
 ];
+/** After the follow-through: seconds the body hangs on, carried on a little by the blade's weight, then seconds to come back to guard. */
+const LINGER = [0.35, 0.35, 0.4, 0.6];
+const RECOVER = [0.6, 0.6, 0.6, 0.8];
+/** Where the follow-through drifts to while it lingers: a little further along the cut, a little lower. */
+const settlePose = (S: { strike: Pose; follow: Pose }): Pose => {
+  const d = blend(S.strike, S.follow, 1.12);
+  return { ...d, st: S.follow.st + 0.1, two: S.follow.two, hop: 0 };
+};
 const lerpV = (a: V3, b: V3, k: number): V3 => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
 const ease = (k: number) => { const x = Math.max(0, Math.min(1, k)); return x * x * (3 - 2 * x); };
 /** Pose -> flat number list and back, for the spline. */
@@ -569,7 +583,7 @@ export class Vehicle {
    * Robot close combat.  `state` runs stowed -> drawing -> ready <-> slash -> stowing -> stowed;
    * the game decides when, this class only animates.  `combo` picks the slash (0..3).
    */
-  readonly saber = { state: 'stowed' as 'stowed' | 'drawing' | 'ready' | 'slash' | 'stowing', t: 0, combo: 0, dur: 0.45, ignite: 0, step: 1 };
+  readonly saber = { state: 'stowed' as 'stowed' | 'drawing' | 'ready' | 'slash' | 'stowing', t: 0, combo: 0, dur: 0.45, ignite: 0, step: 1, hold: 0, rec: 0, total: 0.45 };
   /** Metres of the current cut's step already applied to pos (root motion). */
   private stepDone = 0;
   /** Where the feet are now (local z), and where they were when the current cut began. */
@@ -600,8 +614,10 @@ export class Vehicle {
   /** Start slash `i` (0..3).  Returns false if the saber is not in hand. */
   slash(i: number) {
     const sb = this.saber;
-    if (sb.state !== 'ready' && !(sb.state === 'slash' && sb.t > sb.dur * 0.62)) return false;
+    // a chained cut takes over once the blade is into its follow-through, and flows on from there
+    if (sb.state !== 'ready' && !(sb.state === 'slash' && sb.t > sb.dur * 0.72)) return false;
     sb.state = 'slash'; sb.t = 0; sb.combo = i; sb.dur = SLASHES[i].dur;
+    sb.hold = LINGER[i]; sb.rec = RECOVER[i]; sb.total = sb.dur * 0.8 + sb.hold + sb.rec;
     this.stepDone = 0;
     this.feetStart = { ...this.feetNow }; // a chained cut starts its footwork from mid-recovery
     this.slashFrom = this.poseNow;
@@ -646,12 +662,14 @@ export class Vehicle {
       ignite = 1;
     } else if (sb.state === 'slash') {
       const S = SLASHES[sb.combo];
-      const k = sb.t / S.dur;
-      // one smooth curve through start -> wind-up -> strike -> follow-through -> guard:
-      // the speed changes continuously, so there is no hitch at any key
-      key = splinePose([this.slashFrom, S.wind, S.strike, S.follow, GUARD], [0, 0.3, 0.55, 0.8, 1], k);
+      // one smooth curve through start -> wind-up -> strike -> follow-through, then the
+      // weight of the blade carries it on a little and the body hangs there before it
+      // comes back up to guard -- unless the next cut takes over from the follow-through
+      const A = 0.8 * S.dur, T = sb.total;
+      key = splinePose([this.slashFrom, S.wind, S.strike, S.follow, settlePose(S), GUARD],
+        [0, 0.3 * S.dur, 0.55 * S.dur, A, A + sb.hold, T].map((x) => x / T), sb.t / T);
       ignite = 1;
-      if (k >= 1) { sb.state = 'ready'; sb.t = 0; }
+      if (sb.t >= T) { sb.state = 'ready'; sb.t = 0; }
     } else if (sb.state === 'stowing') {
       // a shot wanted: put the saber away quickly so the rifle can come up
       if (this.aimHold > 0) sb.t += dt * 2;
@@ -686,9 +704,13 @@ export class Vehicle {
     if (sb.state === 'slash') {
       const k = sb.t / sb.dur;
       const L = STEP_IN[sb.combo] * sb.step;
-      const settle = ease(k / 0.28);
+      const s0 = Math.min(1, k / 0.28), settle = ease(s0);
       const f0 = this.feetStart.front * (1 - settle) + gFront * settle;
       const b0 = this.feetStart.back * (1 - settle) + gBack * settle;
+      // chained from the last cut's lunge: the front foot stays planted and the body is
+      // carried up over it (root motion) while the back foot steps up behind
+      const carry = Math.max(0, gFront - this.feetStart.front) * settle;
+      if (s0 < 1 && (carry > 0.3 || Math.abs(this.feetStart.back - gBack) > 0.8)) liftB = Math.sin(Math.PI * s0) * 1.6;
       // the lunge
       const u = Math.max(0, Math.min(1, (k - 0.28) / 0.27));
       const D = L * BODY_SHARE * ease(u);
@@ -698,14 +720,14 @@ export class Vehicle {
       // (a step longer than the leg can trail drags the back foot along rather than sinking the hips)
       back = Math.min(BACK_MAX, b0 + D);
       // the recovery: rise over the planted front foot, draw the back foot up
-      const r = Math.max(0, Math.min(1, (k - 0.78) / 0.22));
+      const r = Math.max(0, Math.min(1, (sb.t - sb.dur * 0.8 - sb.hold) / sb.rec));
       const E = (gFront - landAt) * ease(r);
       front += E;
       back = back * (1 - ease(r)) + gBack * ease(r);
       if (r > 0 && r < 1) liftB = Math.sin(Math.PI * r) * 1.6;
       // root motion for whatever the body travelled this frame
-      const dTotal = D + E - this.stepDone;
-      this.stepDone = D + E;
+      const dTotal = carry + D + E - this.stepDone;
+      this.stepDone = carry + D + E;
       this.pos.x -= Math.sin(this.yaw) * dTotal;
       this.pos.z -= Math.cos(this.yaw) * dTotal;
     } else this.stepDone = 0;

@@ -12,6 +12,7 @@ import { SeasonalParticles } from './world/particles';
 import { COURSE, type Viewpoint } from './world/course';
 import { cruiseNearest } from './world/cruise';
 import { RobotGame } from './game/game';
+import { SpeedFx } from './game/speedfx';
 import { sfx } from './audio/sfx';
 import { Player } from './player/player';
 import { XRSupport } from './xr/xr';
@@ -67,6 +68,7 @@ pipeline.setSize(window.innerWidth, window.innerHeight);
 const hud = new Hud(tod, cfg);
 // robot mode (?vehicle=robot): beams, verniers, a kaiju
 const game = player.vehicle?.spec.robot ? new RobotGame(world, player, hud) : null;
+const speedFx = new SpeedFx(camera);
 if (game) player.onCrush = (id) => game.crush(id);
 player.onLand = (vy) => { const v = player.vehicle; if (v) sfx.robotStep(v.pos, Math.min(3, 1 + vy * 0.1)); };
 let firing = false;
@@ -150,20 +152,24 @@ const KEY_TIMES = keyTimes();
 function step(dt: number) {
   xr.readInput();
   tod.update(dt);
-  player.update(dt);
+  // hit-stop: the fighters freeze for a beat when a blade bites; the world runs on
+  const fdt = game ? dt * game.timeScale(dt) : dt;
+  player.update(fdt);
   world.update(dt);
   if (game) {
     const xf = xrFire();
     game.trigger(camera, firing || xf, pressed || (xf && !xrFireWas));
     pressed = false;
     xrFireWas = xf;
-    game.update(dt, camera);
+    game.update(fdt, camera);
   }
   // ears on the camera; the loops follow what is being ridden
   sfx.listen(camera);
   const rv = player.mode === 'ride' ? player.vehicle : null;
   sfx.loops(rv?.spec.robot ? rv.thrust : 0, rv?.spec.flight ? rv.speed : null, rv?.airborne ? Math.abs(rv.speed) : 0, rv?.spec.robot ? rv.saber.ignite : 0);
   if (!xr.presenting) player.applyCamera(rig, camera);
+  const bv = player.mode === 'ride' ? player.vehicle : null;
+  speedFx.update(dt, bv?.spec.robot ? player.boostLevel : 0, bv ? Math.abs(bv.speed) : 0, xr.presenting);
   xr.update(dt);
   applyLook();
   camera.getWorldPosition(_camWorld);

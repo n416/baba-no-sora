@@ -47,8 +47,6 @@ const SLASH_DAMAGE = [6, 6, 7, 15];
 const RECOIL = { beam: 0.28, slash: 0.6, finisher: 1.15 };
 /** 1/s: a knock of `k` metres is a slide starting at k * KNOCK_DECAY m/s. */
 const KNOCK_DECAY = 3.5;
-/** After a slash finishes, the next click within this window continues the combo. */
-const COMBO_WINDOW = 1.1;
 
 type Phase = 'calm' | 'rising' | 'fighting' | 'dying' | 'cleared';
 interface Orb { mesh: THREE.Mesh; v: THREE.Vector3; life: number }
@@ -97,7 +95,6 @@ export class RobotGame {
   private kaijuSteps = 0;
   // saber
   private wantSlash = false;
-  private sinceSlash = 99; // time since the last slash finished
   private lastCombo = -1;
   private slashStruck = false;
   private slashSwung = false;
@@ -107,6 +104,14 @@ export class RobotGame {
   private stun = 0;
   /** Knock-back slide of the kaiju (m/s), decays at KNOCK_DECAY. */
   private readonly kVel = new THREE.Vector3();
+  /** Seconds of hit-stop left: robot and kaiju run slowed right down. */
+  private hitStop = 0;
+  /** Time scale for the fighters this frame (hit-stop); call once per frame with the real dt. */
+  timeScale(dt: number) {
+    if (this.hitStop <= 0) return 1;
+    this.hitStop -= dt;
+    return 0.08;
+  }
 
   constructor(world: World, player: Player, hud: GameHud) {
     this.world = world;
@@ -206,7 +211,10 @@ export class RobotGame {
     // robot footfalls: one thud per half stride on the ground
     if (v && this.robotActive) {
       const n = v.stepCount;
-      if (n !== this.robotSteps && !v.airborne && Math.abs(v.speed) > 0.5) sfx.robotStep(v.pos, Math.min(1.6, 0.6 + Math.abs(v.speed) * 0.08));
+      if (n !== this.robotSteps && !v.airborne && Math.abs(v.speed) > 0.5) {
+        sfx.robotStep(v.pos, Math.min(1.6, 0.6 + Math.abs(v.speed) * 0.08));
+        this.player.kick(0.12 + Math.abs(v.speed) * 0.012);
+      }
       this.robotSteps = n;
     }
     // while aiming, the body swings round toward the target (the camera does not: the pilot keeps the view)
@@ -309,9 +317,11 @@ export class RobotGame {
     const d = wrap(want - v.yaw);
     if (Math.abs(d) > 0.01) v.yaw += Math.sign(d) * Math.min(Math.abs(d), 1.4 * dt);
     // start the next cut: the combo continues if the click came soon enough after the last one
-    if (sb.state !== 'slash') this.sinceSlash += dt;
     if (this.wantSlash) {
-      const next = this.sinceSlash < COMBO_WINDOW || sb.state === 'slash' ? (this.lastCombo + 1) % SLASHES.length : 0;
+      // the combo flows on from a cut's follow-through or while it hangs there; once the body
+      // is coming back up to guard (or stands in it) the next click starts it over
+      const flowing = sb.state === 'slash' && sb.t < sb.dur * 0.8 + sb.hold + sb.rec * 0.3;
+      const next = flowing ? (this.lastCombo + 1) % SLASHES.length : 0;
       // step in fully from out at the edge of reach, barely when already on top of it
       v.saber.step = Math.max(0.2, Math.min(1.8, (dist - 18) / 12));
       if (v.slash(next)) {
@@ -320,7 +330,6 @@ export class RobotGame {
         this.comboLog.push(next);
         this.slashStruck = false;
         this.slashSwung = false;
-        this.sinceSlash = 0;
       } else if (sb.state !== 'drawing' && sb.state !== 'slash') this.wantSlash = false;
     }
     if (sb.state !== 'slash') return;
@@ -331,6 +340,7 @@ export class RobotGame {
     if (k > 0.26 && k < 0.82 && v.bladeEnds(_a, _b)) this.trail.push(_a, _b);
     if (!this.slashStruck && k >= 0.45) {
       this.slashStruck = true;
+      this.player.kick(heavy ? 0.45 : 0.25);
       const rel = Math.abs(wrap(want - v.yaw));
       if (fighting && dist < SLASH_REACH && rel < 1.2) {
         // where the blade meets the kaiju: the point of its body sphere nearest the blade tip
@@ -339,6 +349,9 @@ export class RobotGame {
         const at = _h.copy(_b).sub(c).setLength(13 * S * 0.8).add(c);
         at.y = Math.max(at.y, _b.y * 0.5 + at.y * 0.5);
         this.hitKaiju(at, SLASH_DAMAGE[sb.combo], heavy ? RECOIL.finisher : RECOIL.slash, heavy ? 5 : 1.5);
+        // the blade bites: everything catches for a moment, and the view jolts
+        this.hitStop = heavy ? 0.16 : 0.09;
+        this.player.kick(heavy ? 1.1 : 0.55);
         this.slashHits++;
         this.fx.impact(at, heavy ? 1.8 : 1.1, '#ff6ac8');
         this.fx.sparkBurst(at, heavy ? 40 : 20, 55);

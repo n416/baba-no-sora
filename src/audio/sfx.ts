@@ -330,8 +330,8 @@ export class Sfx {
     const j = this.jet!;
     const k = Math.max(0, Math.min(1, thrust));
     j.body.gain.setTargetAtTime(0.75 * Math.pow(k, 0.8), t, 0.06);
-    j.tone.frequency.setTargetAtTime(220 + 1100 * k, t, 0.08); // opens up as the jets go to full
-    j.hiss.gain.setTargetAtTime(0.07 * k * k, t, 0.08);
+    j.tone.frequency.setTargetAtTime(200 + 650 * k, t, 0.08); // opens up as the jets go to full
+    j.hiss.gain.setTargetAtTime(0.03 * k * k, t, 0.08);
     j.hissF.frequency.setTargetAtTime(1500 + 1500 * k, t, 0.1);
     // ignition: a "bwoom" when the jets light from idle
     if (k > 0.35 && this.lastThrust <= 0.35) this.ignite();
@@ -342,7 +342,7 @@ export class Sfx {
       this.engine.osc.frequency.setTargetAtTime(48 + Math.abs(engineSpeed) * 3.2, t, 0.15);
       this.engine.buzz.frequency.setTargetAtTime(22 + Math.abs(engineSpeed) * 2.1, t, 0.15);
     }
-    this.wind.gain.setTargetAtTime(Math.min(0.28, wind * 0.011), t, 0.3);
+    this.wind.gain.setTargetAtTime(Math.min(0.16, wind * 0.006), t, 0.4);
     if (this.hum) {
       this.hum.g.gain.setTargetAtTime(saber * 0.09, t, 0.05);
       this.hum.osc.frequency.setTargetAtTime(88 + Math.random() * 4, t, 0.05); // a slight waver
@@ -351,20 +351,6 @@ export class Sfx {
 
   private startLoops() {
     const ctx = this.ctx!;
-    const src = (type: BiquadFilterType, f: number, q = 0.8) => {
-      const n = ctx.createBufferSource();
-      n.buffer = this.noise;
-      n.loop = true;
-      const filt = ctx.createBiquadFilter();
-      filt.type = type;
-      filt.frequency.value = f;
-      filt.Q.value = q;
-      const g = ctx.createGain();
-      g.gain.value = 0;
-      n.connect(filt).connect(g).connect(this.master);
-      n.start();
-      return g;
-    };
     this.jet = this.makeJet();
     {
       // saber hum: two detuned saws through a low-pass, off until a blade is lit
@@ -382,7 +368,28 @@ export class Sfx {
       o1.start(); o2.start();
       this.hum = { g: hg, osc: o1 };
     }
-    this.wind = src('highpass', 600, 0.4);
+    {
+      // air rushing past a big machine: brown noise, low and soft, with slow gusts -- not a hiss
+      const n = ctx.createBufferSource();
+      n.buffer = this.brown;
+      n.loop = true;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 420;
+      lp.Q.value = 0.3;
+      const gust = ctx.createGain();
+      gust.gain.value = 0.8;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 0.23;
+      const depth = ctx.createGain();
+      depth.gain.value = 0.25;
+      lfo.connect(depth).connect(gust.gain);
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      n.connect(lp).connect(gust).connect(g).connect(this.master);
+      n.start(); lfo.start();
+      this.wind = g;
+    }
     const g = ctx.createGain();
     g.gain.value = 0;
     const filt = ctx.createBiquadFilter();
